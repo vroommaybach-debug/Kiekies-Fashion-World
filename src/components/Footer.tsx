@@ -88,14 +88,6 @@ export const Footer: React.FC = () => {
               </li>
               <li>
                 <button
-                  onClick={() => navigate('/admin')}
-                  className="hover:text-white transition-colors"
-                >
-                  Admin Portal
-                </button>
-              </li>
-              <li>
-                <button
                   onClick={() => navigate('/cart')}
                   className="hover:text-white transition-colors"
                 >

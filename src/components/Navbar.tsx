@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from '../lib/router';
 import { useCart } from '../context/CartContext';
-import { Menu, X, ShoppingBag, ShieldCheck } from 'lucide-react';
+import { Menu, X, ShoppingBag } from 'lucide-react';
 
 interface NavbarProps {
   faintOnHero?: boolean;
@@ -85,15 +85,6 @@ export const Navbar: React.FC<NavbarProps> = ({ faintOnHero = false }) => {
         {/* Right: Actions */}
         <div className="flex items-center gap-6">
           <button
-            onClick={() => navigate('/admin')}
-            className="hidden lg:flex items-center gap-1.5 text-[10px] tracking-[0.2em] uppercase text-neutral-400 hover:text-white transition-colors"
-            title="Atelier Admin"
-          >
-            <ShieldCheck size={14} strokeWidth={1.5} />
-            <span>Atelier</span>
-          </button>
-
-          <button
             onClick={() => setIsCartOpen(true)}
             className="flex items-center gap-2 text-neutral-300 hover:text-white transition-colors group p-1"
             aria-label={`View bag with ${totalItems} items`}
@@ -135,17 +126,7 @@ export const Navbar: React.FC<NavbarProps> = ({ faintOnHero = false }) => {
             ))}
           </div>
 
-          <div className="border-t border-neutral-800 pt-8 space-y-4">
-            <button
-              onClick={() => {
-                setMobileMenuOpen(false);
-                navigate('/admin');
-              }}
-              className="text-xs uppercase tracking-widest text-neutral-400 hover:text-white flex items-center gap-2"
-            >
-              <ShieldCheck size={15} />
-              <span>Atelier Management</span>
-            </button>
+          <div className="border-t border-neutral-800 pt-8">
             <p className="text-[11px] text-neutral-400 tracking-wider">
               High-end Nigerian Ready-to-Wear & Bespoke Tailoring
             </p>

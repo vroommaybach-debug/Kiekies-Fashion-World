@@ -42,8 +42,8 @@ interface AdminPageProps {
   initialTab?: 'hero' | 'categories' | 'products' | 'orders';
 }
 
-const ADMIN_PASSCODE = 'kiekies2026';
-const AUTH_STORAGE_KEY = 'kiekies_admin_auth_v1';
+const ADMIN_PASSCODE = 'Kiekiesfashion2026';
+const AUTH_STORAGE_KEY = 'kiekies_admin_auth_v2';
 
 export const AdminPage: React.FC<AdminPageProps> = ({
   products,
@@ -113,7 +113,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (passcodeInput.trim() === ADMIN_PASSCODE || passcodeInput.trim() === 'admin') {
+    if (passcodeInput.trim() === ADMIN_PASSCODE) {
       setIsAuthenticated(true);
       localStorage.setItem(AUTH_STORAGE_KEY, 'true');
       setAuthError(false);
@@ -274,14 +274,14 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                     setPasscodeInput(e.target.value);
                     setAuthError(false);
                   }}
-                  placeholder="Enter passcode (default: kiekies2026)"
+                  placeholder="Enter security passcode"
                   className="w-full bg-black border border-neutral-800 text-white text-xs px-4 py-3 font-mono focus:border-white focus:outline-none"
                   autoFocus
                 />
               </div>
               {authError && (
                 <p className="text-xs text-red-400 mt-2 font-mono">
-                  Incorrect passcode. Try <span className="underline">kiekies2026</span>
+                  Incorrect passcode. Access denied.
                 </p>
               )}
             </div>
@@ -290,7 +290,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
               type="submit"
               className="w-full bg-white text-black text-xs uppercase tracking-[0.25em] py-3.5 font-medium hover:bg-neutral-200 transition-colors"
             >
-              Unlock Atelier
+              Authenticate
             </button>
           </form>
 
