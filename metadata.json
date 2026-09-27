@@ -1,0 +1,6 @@
+{
+  "name": "Kiekies Fashion",
+  "description": "Kiekies Fashion is a luxury contemporary fashion house based in Nigeria specializing in women's, men's, and children's apparel, alongside artisanal accessories. The brand offers structured tailoring and minimalist silhouettes with direct WhatsApp-based order consultation and fulfillment.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
