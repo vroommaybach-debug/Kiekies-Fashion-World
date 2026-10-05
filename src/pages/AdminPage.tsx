@@ -127,88 +127,110 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     localStorage.removeItem(AUTH_STORAGE_KEY);
   };
 
+  const [formError, setFormError] = useState<string | null>(null);
+
   // Hero Save
-  const handleSaveHero = async () => {
+  const handleSaveHero = async (overrideUrl?: string) => {
+    const targetUrl = overrideUrl !== undefined ? overrideUrl : heroImage;
+    if (!targetUrl) return;
     setHeroSaving(true);
-    await updateSiteConfigHero(heroImage);
-    await onRefreshData();
-    setHeroSaving(false);
-    setHeroSavedSuccess(true);
-    setTimeout(() => setHeroSavedSuccess(false), 3000);
+    try {
+      await updateSiteConfigHero(targetUrl);
+      await onRefreshData();
+      setHeroSavedSuccess(true);
+      setTimeout(() => setHeroSavedSuccess(false), 3000);
+    } catch (err) {
+      console.error('Error saving hero image:', err);
+    } finally {
+      setHeroSaving(false);
+    }
   };
 
   // Category Heroes Save
-  const handleSaveCategoryHeroes = async () => {
+  const handleSaveCategoryHeroes = async (overrideHeroes?: typeof categoryHeroes) => {
+    const targetHeroes = overrideHeroes || categoryHeroes;
     setCategoriesSaving(true);
-    await updateSiteConfigCategoryHeroes(categoryHeroes);
-    await onRefreshData();
-    setCategoriesSaving(false);
-    setCategoriesSavedSuccess(true);
-    setTimeout(() => setCategoriesSavedSuccess(false), 3000);
+    try {
+      await updateSiteConfigCategoryHeroes(targetHeroes);
+      await onRefreshData();
+      setCategoriesSavedSuccess(true);
+      setTimeout(() => setCategoriesSavedSuccess(false), 3000);
+    } catch (err) {
+      console.error('Error saving category heroes:', err);
+    } finally {
+      setCategoriesSaving(false);
+    }
   };
 
   // Handle Product Submit (Create / Edit)
   const handleProductSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
     if (!productForm.name || !productForm.price || !productForm.image_url) {
-      alert('Please fill in product name, price, and primary image URL.');
+      setFormError('Please fill in product name, price, and primary image.');
       return;
     }
 
     setProductSaving(true);
 
-    const parsedSizes = productForm.sizes
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
+    try {
+      const parsedSizes = productForm.sizes
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
 
-    const parsedGallery = productForm.gallery_urls
-      .split('\n')
-      .map((s) => s.trim())
-      .filter(Boolean);
+      const parsedGallery = productForm.gallery_urls
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
 
-    if (!parsedGallery.includes(productForm.image_url)) {
-      parsedGallery.unshift(productForm.image_url);
+      if (!parsedGallery.includes(productForm.image_url)) {
+        parsedGallery.unshift(productForm.image_url);
+      }
+
+      const payload = {
+        name: productForm.name.trim(),
+        category: productForm.category,
+        price: Number(productForm.price),
+        image_url: productForm.image_url.trim(),
+        gallery_urls: parsedGallery,
+        sizes: parsedSizes.length > 0 ? parsedSizes : ['One Size'],
+        description: productForm.description.trim() || null,
+        featured: productForm.featured,
+        best_seller: productForm.best_seller,
+        status: productForm.status,
+      };
+
+      if (editingProductId) {
+        await updateProduct(editingProductId, payload);
+      } else {
+        await createProduct(payload);
+      }
+
+      await onRefreshData();
+      setProductSuccess(true);
+      setTimeout(() => setProductSuccess(false), 3000);
+
+      // Reset form
+      setEditingProductId(null);
+      setProductForm({
+        name: '',
+        category: 'women',
+        price: '',
+        image_url: '',
+        gallery_urls: '',
+        sizes: 'UK 8, UK 10, UK 12, UK 14',
+        description: '',
+        featured: false,
+        best_seller: false,
+        status: 'published',
+      });
+    } catch (err) {
+      console.error('Error saving product:', err);
+      setFormError('Failed to save product to cloud catalog. Please try again.');
+    } finally {
+      setProductSaving(false);
     }
-
-    const payload = {
-      name: productForm.name.trim(),
-      category: productForm.category,
-      price: Number(productForm.price),
-      image_url: productForm.image_url.trim(),
-      gallery_urls: parsedGallery,
-      sizes: parsedSizes.length > 0 ? parsedSizes : ['One Size'],
-      description: productForm.description.trim() || null,
-      featured: productForm.featured,
-      best_seller: productForm.best_seller,
-      status: productForm.status,
-    };
-
-    if (editingProductId) {
-      await updateProduct(editingProductId, payload);
-    } else {
-      await createProduct(payload);
-    }
-
-    await onRefreshData();
-    setProductSaving(false);
-    setProductSuccess(true);
-    setTimeout(() => setProductSuccess(false), 3000);
-
-    // Reset form
-    setEditingProductId(null);
-    setProductForm({
-      name: '',
-      category: 'women',
-      price: '',
-      image_url: '',
-      gallery_urls: '',
-      sizes: 'UK 8, UK 10, UK 12, UK 14',
-      description: '',
-      featured: false,
-      best_seller: false,
-      status: 'published',
-    });
   };
 
   const handleEditClick = (p: Product) => {
@@ -228,17 +250,15 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     window.scrollTo({ top: 300, behavior: 'smooth' });
   };
 
-  const handleDeleteProduct = async (id: string, name: string) => {
-    if (confirm(`Archive garment "${name}" from catalog?`)) {
-      await deleteProduct(id);
-      await onRefreshData();
-    }
+  const handleDeleteProduct = async (id: string) => {
+    await deleteProduct(id);
+    await onRefreshData();
   };
 
   const handleStatusChange = async (orderId: string, newStatus: 'new' | 'confirmed' | 'fulfilled') => {
     await updateOrderStatus(orderId, newStatus);
     setOrders((prev) =>
-      prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o))
+      prev.map((o) => (o.id === orderId || o.code === orderId ? { ...o, status: newStatus } : o))
     );
   };
 
@@ -445,7 +465,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                   {/* Device upload button */}
                   <label className="cursor-pointer border border-neutral-700 hover:border-white px-3 py-1 text-[11px] uppercase tracking-wider font-mono text-neutral-300 hover:text-white flex items-center gap-1.5 transition-colors">
                     <Upload size={13} />
-                    <span>Upload to Server</span>
+                    <span>Upload to Cloud</span>
                     <input
                       type="file"
                       accept="image/*"
@@ -455,6 +475,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                         if (file) {
                           const serverUrl = await uploadImageToServer(file);
                           setHeroImage(serverUrl);
+                          await handleSaveHero(serverUrl);
                         }
                       }}
                     />
@@ -540,14 +561,14 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
               <div className="flex items-center gap-4 pt-4 border-t border-neutral-900">
                 <button
-                  onClick={handleSaveHero}
+                  onClick={() => handleSaveHero()}
                   disabled={heroSaving}
                   className="bg-white text-black px-8 py-3.5 text-xs uppercase tracking-[0.2em] font-medium hover:bg-neutral-200 transition-colors disabled:opacity-50 flex items-center gap-2"
                 >
                   {heroSavedSuccess ? (
                     <>
                       <Check size={16} />
-                      <span>Hero Updated</span>
+                      <span>Hero Updated Live</span>
                     </>
                   ) : (
                     <span>{heroSaving ? 'Saving...' : 'Deploy Hero Image'}</span>
@@ -589,7 +610,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                           const file = e.target.files?.[0];
                           if (file) {
                             const serverUrl = await uploadImageToServer(file);
-                            setCategoryHeroes({ ...categoryHeroes, women: serverUrl });
+                            const next = { ...categoryHeroes, women: serverUrl };
+                            setCategoryHeroes(next);
+                            await handleSaveCategoryHeroes(next);
                           }
                         }}
                       />
@@ -630,7 +653,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                           const file = e.target.files?.[0];
                           if (file) {
                             const serverUrl = await uploadImageToServer(file);
-                            setCategoryHeroes({ ...categoryHeroes, men: serverUrl });
+                            const next = { ...categoryHeroes, men: serverUrl };
+                            setCategoryHeroes(next);
+                            await handleSaveCategoryHeroes(next);
                           }
                         }}
                       />
@@ -671,7 +696,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                           const file = e.target.files?.[0];
                           if (file) {
                             const serverUrl = await uploadImageToServer(file);
-                            setCategoryHeroes({ ...categoryHeroes, kids: serverUrl });
+                            const next = { ...categoryHeroes, kids: serverUrl };
+                            setCategoryHeroes(next);
+                            await handleSaveCategoryHeroes(next);
                           }
                         }}
                       />
@@ -712,7 +739,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                           const file = e.target.files?.[0];
                           if (file) {
                             const serverUrl = await uploadImageToServer(file);
-                            setCategoryHeroes({ ...categoryHeroes, accessories: serverUrl });
+                            const next = { ...categoryHeroes, accessories: serverUrl };
+                            setCategoryHeroes(next);
+                            await handleSaveCategoryHeroes(next);
                           }
                         }}
                       />
@@ -739,7 +768,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
               <div className="pt-4 border-t border-neutral-900">
                 <button
-                  onClick={handleSaveCategoryHeroes}
+                  onClick={() => handleSaveCategoryHeroes()}
                   disabled={categoriesSaving}
                   className="bg-white text-black px-8 py-3.5 text-xs uppercase tracking-[0.2em] font-medium hover:bg-neutral-200 transition-colors disabled:opacity-50 flex items-center gap-2"
                 >
@@ -1025,6 +1054,12 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                   </div>
                 </div>
 
+                {formError && (
+                  <p className="text-xs text-red-400 font-mono border border-red-900/50 bg-red-950/30 p-3">
+                    {formError}
+                  </p>
+                )}
+
                 <div className="pt-4 flex items-center gap-4">
                   <button
                     type="submit"
@@ -1034,7 +1069,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                     {productSuccess ? (
                       <>
                         <Check size={16} />
-                        <span>Garment Saved</span>
+                        <span>Garment Saved Live</span>
                       </>
                     ) : (
                       <span>{editingProductId ? 'Update Garment' : 'Publish Garment'}</span>
@@ -1127,7 +1162,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                               <Edit3 size={15} />
                             </button>
                             <button
-                              onClick={() => handleDeleteProduct(p.id, p.name)}
+                              onClick={() => handleDeleteProduct(p.id)}
                               className="text-neutral-500 hover:text-red-400 p-1"
                               title="Archive piece"
                             >

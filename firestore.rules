@@ -1,0 +1,164 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Reusable Hardened Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'vroommaybach@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // 3. Validation Blueprints
+    function isValidProduct(data) {
+      return data.keys().hasAll([
+          'id', 'name', 'category', 'price', 'image_url',
+          'gallery_urls', 'sizes', 'featured', 'best_seller', 'status', 'created_at'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'name', 'category', 'price', 'image_url',
+          'gallery_urls', 'sizes', 'description', 'featured', 'best_seller', 'status', 'created_at'
+        ]) &&
+        isValidId(data.id) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 200 &&
+        data.category is string && data.category in ['women', 'men', 'kids', 'accessories'] &&
+        data.price is number && data.price >= 0 &&
+        data.image_url is string && data.image_url.size() >= 1 && data.image_url.size() <= 900000 &&
+        data.gallery_urls is list && data.gallery_urls.size() >= 1 && data.gallery_urls.size() <= 10 &&
+        data.gallery_urls[0] is string && data.gallery_urls[0].size() <= 900000 &&
+        data.sizes is list && data.sizes.size() >= 1 && data.sizes.size() <= 15 &&
+        data.sizes[0] is string && data.sizes[0].size() <= 50 &&
+        (!('description' in data) || data.description == null || (data.description is string && data.description.size() <= 5000)) &&
+        data.featured is bool &&
+        data.best_seller is bool &&
+        data.status is string && data.status in ['published', 'draft'] &&
+        data.created_at is string && data.created_at.size() >= 1 && data.created_at.size() <= 64;
+    }
+
+    function isValidSiteConfig(data, configKey) {
+      return (
+        configKey == 'hero' &&
+        data.keys().hasAll(['key', 'imageUrl', 'updated_at']) &&
+        data.keys().hasOnly(['key', 'imageUrl', 'updated_at']) &&
+        data.key == 'hero' &&
+        data.imageUrl is string && data.imageUrl.size() >= 1 && data.imageUrl.size() <= 900000 &&
+        data.updated_at is string && data.updated_at.size() >= 1 && data.updated_at.size() <= 64
+      ) || (
+        configKey == 'category_heroes' &&
+        data.keys().hasAll(['key', 'women', 'men', 'kids', 'accessories', 'updated_at']) &&
+        data.keys().hasOnly(['key', 'women', 'men', 'kids', 'accessories', 'updated_at']) &&
+        data.key == 'category_heroes' &&
+        data.women is string && data.women.size() >= 1 && data.women.size() <= 900000 &&
+        data.men is string && data.men.size() >= 1 && data.men.size() <= 900000 &&
+        data.kids is string && data.kids.size() >= 1 && data.kids.size() <= 900000 &&
+        data.accessories is string && data.accessories.size() >= 1 && data.accessories.size() <= 900000 &&
+        data.updated_at is string && data.updated_at.size() >= 1 && data.updated_at.size() <= 64
+      );
+    }
+
+    function isValidOrder(data, orderId) {
+      return data.keys().hasAll(['id', 'code', 'items', 'total', 'status', 'created_at']) &&
+        data.keys().hasOnly(['id', 'code', 'items', 'total', 'status', 'created_at']) &&
+        isValidId(data.id) &&
+        data.code is string && data.code.size() >= 6 && data.code.size() <= 12 &&
+        data.code.matches('^[A-Z0-9]+$') &&
+        data.code == orderId &&
+        data.items is list && data.items.size() >= 1 && data.items.size() <= 20 &&
+        data.items[0] is map &&
+        data.total is number && data.total >= 0 &&
+        data.status is string && data.status in ['new', 'confirmed', 'fulfilled'] &&
+        data.created_at is string && data.created_at.size() >= 1 && data.created_at.size() <= 64;
+    }
+
+    function isValidAdminUser(data, adminUid) {
+      return data.keys().hasAll(['uid', 'role']) &&
+        data.keys().hasOnly(['uid', 'role']) &&
+        isValidId(data.uid) &&
+        data.uid == adminUid &&
+        data.role is string && data.role == 'admin';
+    }
+
+    // 4. Collection Match Blocks
+
+    // /products/{productId}
+    match /products/{productId} {
+      allow get: if isValidId(productId);
+      allow list: if existing().price >= 0;
+      allow create: if isValidId(productId) && isValidProduct(incoming()) && incoming().id == productId;
+      allow update: if isValidId(productId) && isValidProduct(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().created_at == existing().created_at &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'name', 'category', 'price', 'image_url', 'gallery_urls',
+          'sizes', 'description', 'featured', 'best_seller', 'status'
+        ]);
+      allow delete: if isValidId(productId);
+    }
+
+    // /site_config/{configKey}
+    match /site_config/{configKey} {
+      allow get: if isValidId(configKey) && configKey in ['hero', 'category_heroes'];
+      allow list: if false;
+      allow create: if isValidId(configKey) && isValidSiteConfig(incoming(), configKey);
+      allow update: if isValidId(configKey) && isValidSiteConfig(incoming(), configKey) &&
+        incoming().key == existing().key &&
+        (
+          (configKey == 'hero' && incoming().diff(existing()).affectedKeys().hasOnly(['imageUrl', 'updated_at'])) ||
+          (configKey == 'category_heroes' && incoming().diff(existing()).affectedKeys().hasOnly(['women', 'men', 'kids', 'accessories', 'updated_at']))
+        );
+      allow delete: if false;
+    }
+
+    // /orders/{orderId}
+    match /orders/{orderId} {
+      allow get: if isValidId(orderId);
+      allow list: if existing().total >= 0;
+      allow create: if isValidId(orderId) && isValidOrder(incoming(), orderId) && incoming().status == 'new';
+      allow update: if isValidId(orderId) && isValidOrder(incoming(), orderId) &&
+        incoming().id == existing().id &&
+        incoming().code == existing().code &&
+        incoming().created_at == existing().created_at &&
+        incoming().total == existing().total &&
+        (existing().status != 'fulfilled' || isAdmin()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status']);
+      allow delete: if isAdmin() && isValidId(orderId);
+    }
+
+    // /admins/{adminUid}
+    match /admins/{adminUid} {
+      allow get: if isAdmin() && isValidId(adminUid);
+      allow list: if false;
+      allow create: if isAdmin() && isValidId(adminUid) && isValidAdminUser(incoming(), adminUid);
+      allow update: if isAdmin() && isValidId(adminUid) && isValidAdminUser(incoming(), adminUid) &&
+        incoming().uid == existing().uid &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['role']);
+      allow delete: if isAdmin() && isValidId(adminUid);
+    }
+  }
+}

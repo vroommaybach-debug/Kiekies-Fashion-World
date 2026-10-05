@@ -1,6 +1,30 @@
-import { Product, SiteConfig, Order, OrderItem, CategorySlug, SiteConfigCategoryHeroes } from '../types';
-import { supabase, isSupabaseConfigured } from './supabase';
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  onSnapshot,
+  query,
+  where,
+} from 'firebase/firestore';
+import {
+  db,
+  OperationType,
+  handleFirestoreError,
+} from './firebase';
+import {
+  Product,
+  SiteConfig,
+  Order,
+  OrderItem,
+  CategorySlug,
+  SiteConfigCategoryHeroes,
+} from '../types';
 import { DEFAULT_SITE_CONFIG, INITIAL_PRODUCTS } from './defaultData';
+import { fileToDataUrl, normalizeImageUrl } from './driveHelper';
 
 const STORAGE_KEYS = {
   PRODUCTS: 'kiekies_products_v1',
@@ -8,66 +32,51 @@ const STORAGE_KEYS = {
   ORDERS: 'kiekies_orders_v1',
 };
 
-// --- FILE UPLOADER & IMAGE CACHING SERVICE ---
+// Sanitize & enforce blueprint volumetric boundaries
+function sanitizeId(id: string): string {
+  const cleaned = id.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 128);
+  return cleaned || `item-${Date.now()}`;
+}
 
-/**
- * Uploads a local file from the device to the server's permanent storage.
- * Returns a permanent universal URL accessible to all users globally (/uploads/...).
- */
-export async function uploadImageToServer(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const dataUrl = reader.result as string;
-        const res = await fetch('/api/upload', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dataUrl, filename: file.name }),
-        });
+function sanitizeProductPayload(p: Product): Product {
+  const cleanImageUrl = normalizeImageUrl(p.image_url).slice(0, 890000);
+  const rawGallery = Array.isArray(p.gallery_urls) && p.gallery_urls.length > 0
+    ? p.gallery_urls.map((u) => normalizeImageUrl(u).slice(0, 890000)).filter(Boolean)
+    : [cleanImageUrl];
+  const boundedGallery = rawGallery.slice(0, 10);
+  if (boundedGallery.length === 0) boundedGallery.push(cleanImageUrl);
 
-        if (!res.ok) {
-          throw new Error(`Upload failed with status ${res.status}`);
-        }
+  const rawSizes = Array.isArray(p.sizes) && p.sizes.length > 0
+    ? p.sizes.map((s) => String(s).trim().slice(0, 50)).filter(Boolean)
+    : ['One Size'];
+  const boundedSizes = rawSizes.slice(0, 15);
+  if (boundedSizes.length === 0) boundedSizes.push('One Size');
 
-        const data = await res.json();
-        resolve(data.url);
-      } catch (err) {
-        console.warn('Server upload failed, falling back to local dataUrl:', err);
-        // Fallback to local data URL if server call fails
-        resolve(reader.result as string);
-      }
-    };
-    reader.onerror = (e) => reject(e);
-    reader.readAsDataURL(file);
-  });
+  const validCategories: CategorySlug[] = ['women', 'men', 'kids', 'accessories'];
+  const category: CategorySlug = validCategories.includes(p.category) ? p.category : 'women';
+
+  return {
+    id: sanitizeId(p.id),
+    name: String(p.name || 'Untitled Garment').trim().slice(0, 200),
+    category,
+    price: Math.max(0, Number(p.price) || 0),
+    image_url: cleanImageUrl,
+    gallery_urls: boundedGallery,
+    sizes: boundedSizes,
+    description: p.description ? String(p.description).trim().slice(0, 5000) : null,
+    featured: Boolean(p.featured),
+    best_seller: Boolean(p.best_seller),
+    status: p.status === 'draft' ? 'draft' : 'published',
+    created_at: String(p.created_at || new Date().toISOString()).slice(0, 64),
+  };
 }
 
 /**
- * Downloads and caches a Google Drive or external image onto the server permanently.
- * This guarantees the image will never shut off, break from CORS, or hit Drive rate limits.
+ * Compresses and prepares a device File for instant, permanent Firestore persistence.
  */
-export async function cacheRemoteUrlToServer(url: string): Promise<string> {
-  // If already a local server upload, return as-is
-  if (url.startsWith('/uploads/')) return url;
-
-  try {
-    const res = await fetch('/api/cache-url', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      return data.url; // Returns /uploads/...
-    }
-  } catch (err) {
-    console.warn('Server cache-url failed, returning original url:', err);
-  }
-
-  // Fallback to direct normalized URL
-  return url;
+export async function uploadImageToServer(file: File): Promise<string> {
+  const compressedDataUrl = await fileToDataUrl(file, 1200, 0.78);
+  return compressedDataUrl;
 }
 
 // Generate 6-character uppercase alphanumeric code
@@ -80,7 +89,7 @@ export function generateOrderCode(): string {
   return result;
 }
 
-// Local Storage Fallback Helpers
+// Local Storage Cache Helpers
 function getLocalProducts(): Product[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
@@ -95,7 +104,11 @@ function getLocalProducts(): Product[] {
 }
 
 function saveLocalProducts(products: Product[]) {
-  localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
+  try {
+    localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
+  } catch {
+    // Ignore storage quota warnings on local cache
+  }
 }
 
 function getLocalSiteConfig(): SiteConfig {
@@ -112,135 +125,244 @@ function getLocalSiteConfig(): SiteConfig {
 }
 
 function saveLocalSiteConfig(config: SiteConfig) {
-  localStorage.setItem(STORAGE_KEYS.SITE_CONFIG, JSON.stringify(config));
-}
-
-function getLocalOrders(): Order[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.ORDERS);
-    return raw ? JSON.parse(raw) : [];
+    localStorage.setItem(STORAGE_KEYS.SITE_CONFIG, JSON.stringify(config));
   } catch {
-    return [];
+    // Ignore storage quota warnings on local cache
   }
 }
 
-function saveLocalOrders(orders: Order[]) {
-  localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders));
+// Seed initial catalog and site_config into Firestore if empty
+let seedingPromise: Promise<void> | null = null;
+
+export async function ensureFirestoreSeeded(): Promise<void> {
+  if (seedingPromise) return seedingPromise;
+
+  seedingPromise = (async () => {
+    try {
+      const productsQuery = query(collection(db, 'products'), where('price', '>=', 0));
+      const [heroSnap, catSnap, productsSnap] = await Promise.all([
+        getDoc(doc(db, 'site_config', 'hero')),
+        getDoc(doc(db, 'site_config', 'category_heroes')),
+        getDocs(productsQuery),
+      ]);
+
+      const now = new Date().toISOString().slice(0, 64);
+
+      if (!heroSnap.exists()) {
+        await setDoc(doc(db, 'site_config', 'hero'), {
+          key: 'hero',
+          imageUrl: DEFAULT_SITE_CONFIG.hero.imageUrl,
+          updated_at: now,
+        });
+      }
+
+      if (!catSnap.exists()) {
+        await setDoc(doc(db, 'site_config', 'category_heroes'), {
+          key: 'category_heroes',
+          women: DEFAULT_SITE_CONFIG.category_heroes.women,
+          men: DEFAULT_SITE_CONFIG.category_heroes.men,
+          kids: DEFAULT_SITE_CONFIG.category_heroes.kids,
+          accessories: DEFAULT_SITE_CONFIG.category_heroes.accessories,
+          updated_at: now,
+        });
+      }
+
+      if (productsSnap.empty) {
+        await Promise.all(
+          INITIAL_PRODUCTS.map((p) => {
+            const clean = sanitizeProductPayload(p);
+            return setDoc(doc(db, 'products', clean.id), clean);
+          })
+        );
+      }
+    } catch (error) {
+      console.warn('Initial Firestore seed check warning:', error);
+    }
+  })();
+
+  return seedingPromise;
+}
+
+// Real-time Subscriptions for Live Storefront Sync
+export function subscribeToStorefront(
+  onProductsChange: (products: Product[]) => void,
+  onSiteConfigChange: (config: SiteConfig) => void
+): () => void {
+  let unsubProducts: (() => void) | null = null;
+  let unsubHero: (() => void) | null = null;
+  let unsubCategories: (() => void) | null = null;
+  let cancelled = false;
+
+  ensureFirestoreSeeded().then(() => {
+    if (cancelled) return;
+
+    const productsQuery = query(collection(db, 'products'), where('price', '>=', 0));
+    unsubProducts = onSnapshot(
+      productsQuery,
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const list = snapshot.docs.map((d) => d.data() as Product);
+          list.sort(
+            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          );
+          saveLocalProducts(list);
+          onProductsChange(list);
+        }
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'products');
+      }
+    );
+
+    unsubHero = onSnapshot(
+      doc(db, 'site_config', 'hero'),
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data.imageUrl) {
+            const current = getLocalSiteConfig();
+            const next: SiteConfig = {
+              hero: { imageUrl: data.imageUrl },
+              category_heroes: { ...current.category_heroes },
+            };
+            saveLocalSiteConfig(next);
+            onSiteConfigChange(next);
+          }
+        }
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'site_config/hero');
+      }
+    );
+
+    unsubCategories = onSnapshot(
+      doc(db, 'site_config', 'category_heroes'),
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          const current = getLocalSiteConfig();
+          const next: SiteConfig = {
+            hero: { ...current.hero },
+            category_heroes: {
+              women: data.women || current.category_heroes.women,
+              men: data.men || current.category_heroes.men,
+              kids: data.kids || current.category_heroes.kids,
+              accessories: data.accessories || current.category_heroes.accessories,
+            },
+          };
+          saveLocalSiteConfig(next);
+          onSiteConfigChange(next);
+        }
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'site_config/category_heroes');
+      }
+    );
+  });
+
+  return () => {
+    cancelled = true;
+    if (unsubProducts) unsubProducts();
+    if (unsubHero) unsubHero();
+    if (unsubCategories) unsubCategories();
+  };
 }
 
 // --- SITE CONFIG API ---
 export async function getSiteConfig(): Promise<SiteConfig> {
-  // 1. Try server API (Shared across all visitors)
+  await ensureFirestoreSeeded();
   try {
-    const res = await fetch('/api/site-config');
-    if (res.ok) {
-      const config = await res.json();
-      saveLocalSiteConfig(config);
-      return config;
-    }
-  } catch (err) {
-    // offline or dev without server
-  }
+    const [heroSnap, catSnap] = await Promise.all([
+      getDoc(doc(db, 'site_config', 'hero')),
+      getDoc(doc(db, 'site_config', 'category_heroes')),
+    ]);
 
-  // 2. Try Supabase if configured
-  if (isSupabaseConfigured && supabase) {
-    try {
-      const { data, error } = await supabase.from('site_config').select('*');
-      if (!error && data && data.length > 0) {
-        const configMap: Partial<SiteConfig> = {};
-        data.forEach((row: { key: string; value: any }) => {
-          if (row.key === 'hero') configMap.hero = row.value;
-          if (row.key === 'category_heroes') configMap.category_heroes = row.value;
-        });
-        if (configMap.hero && configMap.category_heroes) {
-          return configMap as SiteConfig;
-        }
+    const current = getLocalSiteConfig();
+    const config: SiteConfig = {
+      hero: { ...current.hero },
+      category_heroes: { ...current.category_heroes },
+    };
+
+    if (heroSnap.exists()) {
+      const data = heroSnap.data();
+      if (data.imageUrl) {
+        config.hero = { imageUrl: data.imageUrl };
       }
-    } catch (err) {
-      console.warn('Falling back to local site_config:', err);
     }
-  }
 
-  return getLocalSiteConfig();
+    if (catSnap.exists()) {
+      const data = catSnap.data();
+      config.category_heroes = {
+        women: data.women || config.category_heroes.women,
+        men: data.men || config.category_heroes.men,
+        kids: data.kids || config.category_heroes.kids,
+        accessories: data.accessories || config.category_heroes.accessories,
+      };
+    }
+
+    saveLocalSiteConfig(config);
+    return config;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, 'site_config/hero');
+  }
 }
 
 export async function updateSiteConfigHero(imageUrl: string): Promise<SiteConfig> {
-  // Cache to server disk if it's a remote/drive link
-  const permanentUrl = await cacheRemoteUrlToServer(imageUrl);
+  const cleanUrl = normalizeImageUrl(imageUrl).slice(0, 890000);
+  const now = new Date().toISOString().slice(0, 64);
+  const path = 'site_config/hero';
 
-  // 1. Update server
   try {
-    await fetch('/api/site-config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        key: 'hero',
-        value: { imageUrl: permanentUrl },
-      }),
+    await setDoc(doc(db, 'site_config', 'hero'), {
+      key: 'hero',
+      imageUrl: cleanUrl,
+      updated_at: now,
     });
-  } catch (err) {
-    console.warn('Server site-config update failed:', err);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
   }
 
   const current = getLocalSiteConfig();
   const updated: SiteConfig = {
     ...current,
-    hero: { imageUrl: permanentUrl },
+    hero: { imageUrl: cleanUrl },
   };
   saveLocalSiteConfig(updated);
-
-  if (isSupabaseConfigured && supabase) {
-    try {
-      await supabase.from('site_config').upsert({
-        key: 'hero',
-        value: { imageUrl: permanentUrl },
-      });
-    } catch (err) {
-      console.error('Supabase updateSiteConfigHero error:', err);
-    }
-  }
   return updated;
 }
 
-export async function updateSiteConfigCategoryHeroes(heroes: SiteConfigCategoryHeroes): Promise<SiteConfig> {
-  // Ensure images are cached
-  const permanentHeroes: SiteConfigCategoryHeroes = {
-    women: await cacheRemoteUrlToServer(heroes.women),
-    men: await cacheRemoteUrlToServer(heroes.men),
-    kids: await cacheRemoteUrlToServer(heroes.kids),
-    accessories: await cacheRemoteUrlToServer(heroes.accessories),
+export async function updateSiteConfigCategoryHeroes(
+  heroes: SiteConfigCategoryHeroes
+): Promise<SiteConfig> {
+  const cleanHeroes: SiteConfigCategoryHeroes = {
+    women: normalizeImageUrl(heroes.women).slice(0, 890000),
+    men: normalizeImageUrl(heroes.men).slice(0, 890000),
+    kids: normalizeImageUrl(heroes.kids).slice(0, 890000),
+    accessories: normalizeImageUrl(heroes.accessories).slice(0, 890000),
   };
+  const now = new Date().toISOString().slice(0, 64);
+  const path = 'site_config/category_heroes';
 
   try {
-    await fetch('/api/site-config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        key: 'category_heroes',
-        value: permanentHeroes,
-      }),
+    await setDoc(doc(db, 'site_config', 'category_heroes'), {
+      key: 'category_heroes',
+      women: cleanHeroes.women,
+      men: cleanHeroes.men,
+      kids: cleanHeroes.kids,
+      accessories: cleanHeroes.accessories,
+      updated_at: now,
     });
-  } catch (err) {
-    console.warn('Server site-config update failed:', err);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
   }
 
   const current = getLocalSiteConfig();
   const updated: SiteConfig = {
     ...current,
-    category_heroes: permanentHeroes,
+    category_heroes: cleanHeroes,
   };
   saveLocalSiteConfig(updated);
-
-  if (isSupabaseConfigured && supabase) {
-    try {
-      await supabase.from('site_config').upsert({
-        key: 'category_heroes',
-        value: permanentHeroes,
-      });
-    } catch (err) {
-      console.error('Supabase updateSiteConfigCategoryHeroes error:', err);
-    }
-  }
   return updated;
 }
 
@@ -254,373 +376,203 @@ export interface ProductQueryOptions {
 
 export async function getProducts(options: ProductQueryOptions = {}): Promise<Product[]> {
   const { category, status = 'published', featured, best_seller } = options;
+  await ensureFirestoreSeeded();
 
-  // 1. Try server API (Centralized for all users)
+  let products: Product[] = [];
+
   try {
-    const params = new URLSearchParams();
-    if (category) params.append('category', category);
-    if (status) params.append('status', status);
-    if (featured !== undefined) params.append('featured', String(featured));
-    if (best_seller !== undefined) params.append('best_seller', String(best_seller));
-
-    const res = await fetch(`/api/products?${params.toString()}`);
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        saveLocalProducts(data);
-        return data;
-      }
+    const productsQuery = query(collection(db, 'products'), where('price', '>=', 0));
+    const snap = await getDocs(productsQuery);
+    if (!snap.empty) {
+      products = snap.docs.map((d) => d.data() as Product);
+      saveLocalProducts(products);
+    } else {
+      products = getLocalProducts();
     }
-  } catch (err) {
-    // fallback
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'products');
   }
 
-  // 2. Try Supabase if configured
-  if (isSupabaseConfigured && supabase) {
-    try {
-      let query = supabase.from('products').select('*').order('created_at', { ascending: false });
-
-      if (status !== 'all') {
-        query = query.eq('status', status);
-      }
-      if (category && category !== 'all') {
-        query = query.eq('category', category);
-      }
-      if (typeof featured === 'boolean') {
-        query = query.eq('featured', featured);
-      }
-      if (typeof best_seller === 'boolean') {
-        query = query.eq('best_seller', best_seller);
-      }
-
-      const { data, error } = await query;
-      if (!error && data) {
-        return data as Product[];
-      }
-    } catch (err) {
-      console.warn('Falling back to local products:', err);
-    }
-  }
-
-  // 3. Fallback to local
-  let products = getLocalProducts();
   if (status !== 'all') {
-    products = products.filter(p => p.status === status);
+    products = products.filter((p) => p.status === status);
   }
   if (category && category !== 'all') {
-    products = products.filter(p => p.category === category);
+    products = products.filter((p) => p.category === category);
   }
   if (typeof featured === 'boolean') {
-    products = products.filter(p => p.featured === featured);
+    products = products.filter((p) => p.featured === featured);
   }
   if (typeof best_seller === 'boolean') {
-    products = products.filter(p => p.best_seller === best_seller);
+    products = products.filter((p) => p.best_seller === best_seller);
   }
 
-  return products.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  return products.sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
 }
 
 export async function getProductById(id: string): Promise<Product | null> {
+  const cleanId = sanitizeId(id);
   try {
-    const res = await fetch(`/api/products/${id}`);
-    if (res.ok) return await res.json();
-  } catch (e) {
-    // fallback
-  }
-
-  if (isSupabaseConfigured && supabase) {
-    try {
-      const { data, error } = await supabase.from('products').select('*').eq('id', id).single();
-      if (!error && data) return data as Product;
-    } catch (err) {
-      console.warn('Supabase getProductById failed:', err);
+    const snap = await getDoc(doc(db, 'products', cleanId));
+    if (snap.exists()) {
+      return snap.data() as Product;
     }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `products/${cleanId}`);
   }
 
   const products = getLocalProducts();
-  return products.find(p => p.id === id) || null;
+  return products.find((p) => p.id === cleanId) || null;
 }
 
-export async function createProduct(input: Omit<Product, 'id' | 'created_at'>): Promise<Product> {
-  // Cache primary and gallery images to server if they are Google Drive or external
-  const permanentPrimary = await cacheRemoteUrlToServer(input.image_url);
-  const permanentGallery = await Promise.all(
-    (input.gallery_urls || []).map((u) => cacheRemoteUrlToServer(u))
-  );
+export async function createProduct(
+  input: Omit<Product, 'id' | 'created_at'>
+): Promise<Product> {
+  const id = `prod-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+  const created_at = new Date().toISOString().slice(0, 64);
 
-  const payload = {
+  const newProduct = sanitizeProductPayload({
     ...input,
-    image_url: permanentPrimary,
-    gallery_urls: permanentGallery,
-  };
-
-  // 1. Post to Server API
-  try {
-    const res = await fetch('/api/products', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (res.ok) {
-      const newProduct = await res.json();
-      const local = getLocalProducts();
-      saveLocalProducts([newProduct, ...local]);
-      return newProduct;
-    }
-  } catch (err) {
-    console.warn('Server createProduct failed, saving locally:', err);
-  }
-
-  // Fallback
-  const id = 'prod-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
-  const created_at = new Date().toISOString();
-  const newProduct: Product = {
-    ...payload,
     id,
     created_at,
-  };
+  });
 
-  const products = getLocalProducts();
-  saveLocalProducts([newProduct, ...products]);
-
-  if (isSupabaseConfigured && supabase) {
-    try {
-      await supabase.from('products').insert(newProduct);
-    } catch (err) {
-      console.error('Supabase createProduct error:', err);
-    }
+  const path = `products/${newProduct.id}`;
+  try {
+    await setDoc(doc(db, 'products', newProduct.id), newProduct);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
   }
 
+  const local = getLocalProducts();
+  saveLocalProducts([newProduct, ...local.filter((p) => p.id !== newProduct.id)]);
   return newProduct;
 }
 
-export async function updateProduct(id: string, updates: Partial<Product>): Promise<Product | null> {
-  // Cache updated images if present
-  let permanentUpdates = { ...updates };
-  if (updates.image_url) {
-    permanentUpdates.image_url = await cacheRemoteUrlToServer(updates.image_url);
-  }
-  if (updates.gallery_urls) {
-    permanentUpdates.gallery_urls = await Promise.all(
-      updates.gallery_urls.map((u) => cacheRemoteUrlToServer(u))
-    );
-  }
+export async function updateProduct(
+  id: string,
+  updates: Partial<Product>
+): Promise<Product | null> {
+  const cleanId = sanitizeId(id);
+  const existing = await getProductById(cleanId);
+  if (!existing) return null;
 
+  const updatedProduct = sanitizeProductPayload({
+    ...existing,
+    ...updates,
+    id: existing.id,
+    created_at: existing.created_at,
+  });
+
+  const path = `products/${cleanId}`;
   try {
-    const res = await fetch(`/api/products/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(permanentUpdates),
-    });
-    if (res.ok) {
-      const updated = await res.json();
-      const local = getLocalProducts();
-      const idx = local.findIndex((p) => p.id === id);
-      if (idx !== -1) {
-        local[idx] = updated;
-        saveLocalProducts(local);
-      }
-      return updated;
-    }
-  } catch (e) {
-    // fallback
+    await setDoc(doc(db, 'products', cleanId), updatedProduct);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 
-  const products = getLocalProducts();
-  const index = products.findIndex(p => p.id === id);
-  if (index === -1) return null;
-
-  const updatedProduct = { ...products[index], ...permanentUpdates };
-  products[index] = updatedProduct;
-  saveLocalProducts(products);
-
-  if (isSupabaseConfigured && supabase) {
-    try {
-      await supabase.from('products').update(permanentUpdates).eq('id', id);
-    } catch (err) {
-      console.error('Supabase updateProduct error:', err);
-    }
+  const local = getLocalProducts();
+  const idx = local.findIndex((p) => p.id === cleanId);
+  if (idx !== -1) {
+    local[idx] = updatedProduct;
+    saveLocalProducts(local);
   }
 
   return updatedProduct;
 }
 
 export async function deleteProduct(id: string): Promise<boolean> {
+  const cleanId = sanitizeId(id);
+  const path = `products/${cleanId}`;
   try {
-    await fetch(`/api/products/${id}`, { method: 'DELETE' });
-  } catch (e) {
-    // fallback
+    await deleteDoc(doc(db, 'products', cleanId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 
-  const products = getLocalProducts();
-  const filtered = products.filter(p => p.id !== id);
-  saveLocalProducts(filtered);
-
-  if (isSupabaseConfigured && supabase) {
-    try {
-      await supabase.from('products').delete().eq('id', id);
-    } catch (err) {
-      console.error('Supabase deleteProduct error:', err);
-    }
-  }
-
+  const local = getLocalProducts().filter((p) => p.id !== cleanId);
+  saveLocalProducts(local);
   return true;
 }
 
 // --- ORDERS API ---
 export async function createOrder(
   items: OrderItem[],
-  total: number,
-  customer_name?: string,
-  customer_phone?: string
+  total: number
 ): Promise<Order> {
-  try {
-    const res = await fetch('/api/orders', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items, total, customer_name, customer_phone }),
-    });
-    if (res.ok) {
-      const order = await res.json();
-      const local = getLocalOrders();
-      saveLocalOrders([order, ...local]);
-      return order;
-    }
-  } catch (e) {
-    // fallback
-  }
-
   const code = generateOrderCode();
-  const id = 'ord-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
-  const created_at = new Date().toISOString();
+  const created_at = new Date().toISOString().slice(0, 64);
+
+  const boundedItems: OrderItem[] = (items || []).slice(0, 20).map((item) => ({
+    productId: String(item.productId || '').slice(0, 128),
+    name: String(item.name || '').slice(0, 200),
+    size: String(item.size || 'One Size').slice(0, 50),
+    quantity: Math.max(1, Number(item.quantity) || 1),
+    price: Math.max(0, Number(item.price) || 0),
+    imageUrl: String(item.imageUrl || '').slice(0, 2000),
+  }));
 
   const newOrder: Order = {
-    id,
+    id: code,
     code,
-    items,
-    total,
+    items: boundedItems,
+    total: Math.max(0, Number(total) || 0),
     status: 'new',
     created_at,
-    customer_name,
-    customer_phone,
   };
 
-  const orders = getLocalOrders();
-  saveLocalOrders([newOrder, ...orders]);
-
-  if (isSupabaseConfigured && supabase) {
-    try {
-      await supabase.from('orders').insert(newOrder);
-    } catch (err) {
-      console.error('Supabase createOrder error:', err);
-    }
+  const path = `orders/${code}`;
+  try {
+    await setDoc(doc(db, 'orders', code), newOrder);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
   }
 
   return newOrder;
 }
 
 export async function getOrderByCode(code: string): Promise<Order | null> {
-  const normalized = code.trim().toUpperCase();
+  const normalized = code.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
+  if (!normalized) return null;
 
+  const path = `orders/${normalized}`;
   try {
-    const res = await fetch(`/api/orders/${normalized}`);
-    if (res.ok) return await res.json();
-  } catch (e) {
-    // fallback
-  }
-
-  if (isSupabaseConfigured && supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('orders')
-        .select('*')
-        .eq('code', normalized)
-        .single();
-      if (!error && data) {
-        return {
-          id: data.id,
-          code: data.code,
-          items: data.items,
-          total: Number(data.total),
-          status: data.status,
-          created_at: data.created_at,
-        };
-      }
-    } catch (err) {
-      console.warn('Supabase getOrderByCode error:', err);
+    const snap = await getDoc(doc(db, 'orders', normalized));
+    if (snap.exists()) {
+      return snap.data() as Order;
     }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
   }
 
-  const orders = getLocalOrders();
-  return orders.find(o => o.code.toUpperCase() === normalized) || null;
+  return null;
 }
 
 export async function getAllOrders(): Promise<Order[]> {
   try {
-    const res = await fetch('/api/orders');
-    if (res.ok) {
-      const orders = await res.json();
-      saveLocalOrders(orders);
-      return orders;
-    }
-  } catch (e) {
-    // fallback
+    const ordersQuery = query(collection(db, 'orders'), where('total', '>=', 0));
+    const snap = await getDocs(ordersQuery);
+    const list = snap.docs.map((d) => d.data() as Order);
+    return list.sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'orders');
   }
-
-  if (isSupabaseConfigured && supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('orders')
-        .select('*')
-        .order('created_at', { ascending: false });
-      if (!error && data) {
-        return data.map((d: any) => ({
-          id: d.id,
-          code: d.code,
-          items: d.items,
-          total: Number(d.total),
-          status: d.status,
-          created_at: d.created_at,
-        }));
-      }
-    } catch (err) {
-      console.warn('Supabase getAllOrders failed:', err);
-    }
-  }
-
-  return getLocalOrders();
 }
 
 export async function updateOrderStatus(
-  id: string,
+  idOrCode: string,
   status: 'new' | 'confirmed' | 'fulfilled'
 ): Promise<Order | null> {
+  const cleanCode = sanitizeId(idOrCode);
+  const path = `orders/${cleanCode}`;
   try {
-    const res = await fetch(`/api/orders/${id}/status`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
-    });
-    if (res.ok) {
-      const updated = await res.json();
-      const local = getLocalOrders();
-      const idx = local.findIndex((o) => o.id === id || o.code === id);
-      if (idx !== -1) {
-        local[idx] = updated;
-        saveLocalOrders(local);
-      }
-      return updated;
-    }
-  } catch (e) {
-    // fallback
+    await updateDoc(doc(db, 'orders', cleanCode), { status });
+    const updated = await getDoc(doc(db, 'orders', cleanCode));
+    return updated.exists() ? (updated.data() as Order) : null;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
-
-  const orders = getLocalOrders();
-  const index = orders.findIndex(o => o.id === id || o.code === id);
-  if (index !== -1) {
-    orders[index].status = status;
-    saveLocalOrders(orders);
-  }
-
-  return index !== -1 ? orders[index] : null;
 }

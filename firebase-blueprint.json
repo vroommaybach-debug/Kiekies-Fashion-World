@@ -1,0 +1,206 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "A luxury garment or accessory item in the Kiekies Fashion catalog.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique product identifier",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of the garment",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "category": {
+          "type": "string",
+          "description": "Collection category slug",
+          "enum": ["women", "men", "kids", "accessories"]
+        },
+        "price": {
+          "type": "number",
+          "description": "Price in Nigerian Naira (NGN)"
+        },
+        "image_url": {
+          "type": "string",
+          "description": "Primary image URL or optimized Data URL",
+          "minLength": 1,
+          "maxLength": 900000
+        },
+        "gallery_urls": {
+          "type": "array",
+          "description": "List of gallery image URLs (up to 10 images)"
+        },
+        "sizes": {
+          "type": "array",
+          "description": "Available sizes for this piece (up to 15 sizes)"
+        },
+        "description": {
+          "type": "string",
+          "description": "Editorial description and fabric notes",
+          "maxLength": 5000
+        },
+        "featured": {
+          "type": "boolean",
+          "description": "Whether this item is featured in the Signature Look section"
+        },
+        "best_seller": {
+          "type": "boolean",
+          "description": "Whether this item appears in Permanent Foundations (Best Sellers)"
+        },
+        "status": {
+          "type": "string",
+          "description": "Catalog visibility status",
+          "enum": ["published", "draft"]
+        },
+        "created_at": {
+          "type": "string",
+          "description": "ISO timestamp string when the product was created",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "category",
+        "price",
+        "image_url",
+        "gallery_urls",
+        "sizes",
+        "featured",
+        "best_seller",
+        "status",
+        "created_at"
+      ]
+    },
+    "SiteConfigDoc": {
+      "title": "SiteConfigDoc",
+      "description": "Storefront configuration document for hero and category highlight images.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "Configuration key ('hero' or 'category_heroes')",
+          "enum": ["hero", "category_heroes"]
+        },
+        "imageUrl": {
+          "type": "string",
+          "description": "Hero image URL when key is 'hero'",
+          "maxLength": 900000
+        },
+        "women": {
+          "type": "string",
+          "description": "Women category hero image URL",
+          "maxLength": 900000
+        },
+        "men": {
+          "type": "string",
+          "description": "Men category hero image URL",
+          "maxLength": 900000
+        },
+        "kids": {
+          "type": "string",
+          "description": "Kids category hero image URL",
+          "maxLength": 900000
+        },
+        "accessories": {
+          "type": "string",
+          "description": "Accessories category hero image URL",
+          "maxLength": 900000
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "ISO timestamp of last update",
+          "maxLength": 64
+        }
+      },
+      "required": ["key", "updated_at"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Customer order dossier generated during WhatsApp checkout.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Order document ID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "code": {
+          "type": "string",
+          "description": "6-character uppercase alphanumeric order reference code",
+          "minLength": 6,
+          "maxLength": 12,
+          "pattern": "^[A-Z0-9]+$"
+        },
+        "items": {
+          "type": "array",
+          "description": "Bounded list of ordered items (up to 20 line items)"
+        },
+        "total": {
+          "type": "number",
+          "description": "Total order amount in NGN"
+        },
+        "status": {
+          "type": "string",
+          "description": "Order fulfillment status",
+          "enum": ["new", "confirmed", "fulfilled"]
+        },
+        "created_at": {
+          "type": "string",
+          "description": "ISO timestamp when the order was created",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "code", "items", "total", "status", "created_at"]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Trusted administrator record keyed by Firebase Auth UID.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the administrator",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "role": {
+          "type": "string",
+          "description": "Role designation",
+          "enum": ["admin"]
+        }
+      },
+      "required": ["uid", "role"]
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Publicly readable luxury catalog items; write-protected for atelier admins."
+    },
+    "/site_config/{configKey}": {
+      "schema": { "$ref": "#/entities/SiteConfigDoc" },
+      "description": "Publicly readable storefront configuration (hero and category_heroes); write-protected for atelier admins."
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "Customer order dossiers keyed by order code; creatable on checkout, readable by code, manageable by admins."
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Trusted admin registry keyed by Firebase UID."
+    }
+  }
+}

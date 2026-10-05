@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Product, SiteConfig } from './types';
-import { getProducts, getSiteConfig } from './lib/db';
+import { getProducts, getSiteConfig, subscribeToStorefront } from './lib/db';
 import { DEFAULT_SITE_CONFIG, INITIAL_PRODUCTS } from './lib/defaultData';
 import { RouterProvider, useRouter, parseRoute } from './lib/router';
 import { CartProvider } from './context/CartContext';
@@ -26,7 +26,6 @@ function AppContent() {
 
   const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
   const [siteConfig, setSiteConfig] = useState<SiteConfig>(DEFAULT_SITE_CONFIG);
-  const [loading, setLoading] = useState(true);
 
   const loadData = async () => {
     try {
@@ -38,13 +37,24 @@ function AppContent() {
       if (config) setSiteConfig(config);
     } catch (err) {
       console.error('Failed to load initial atelier data:', err);
-    } finally {
-      setLoading(false);
     }
   };
 
   useEffect(() => {
     loadData();
+    const unsubscribe = subscribeToStorefront(
+      (liveProducts) => {
+        if (liveProducts && liveProducts.length > 0) {
+          setProducts(liveProducts);
+        }
+      },
+      (liveConfig) => {
+        if (liveConfig) {
+          setSiteConfig(liveConfig);
+        }
+      }
+    );
+    return () => unsubscribe();
   }, []);
 
   const isHome = route.name === 'home';
