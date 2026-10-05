@@ -33,6 +33,7 @@ import {
   HardDrive,
   FolderUp,
   FileCheck,
+  Sparkles,
 } from 'lucide-react';
 
 interface AdminPageProps {
@@ -128,6 +129,54 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   };
 
   const [formError, setFormError] = useState<string | null>(null);
+  const [generatingDesc, setGeneratingDesc] = useState(false);
+  const [descGenBadge, setDescGenBadge] = useState<string | null>(null);
+
+  // AI SEO Description Generator (Analyzes Name, Category, Sizes & Garment Image)
+  const handleGenerateSeoDescription = async () => {
+    setFormError(null);
+    setDescGenBadge(null);
+
+    if (!productForm.name.trim() && !productForm.image_url.trim()) {
+      setFormError('Enter a Garment Name or upload a Primary Image first to generate an SEO description.');
+      return;
+    }
+
+    setGeneratingDesc(true);
+    try {
+      const response = await fetch('/api/generate-description', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: productForm.name.trim(),
+          category: productForm.category,
+          sizes: productForm.sizes.trim(),
+          price: productForm.price,
+          imageUrl: productForm.image_url.trim(),
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to generate description');
+      }
+
+      if (data.description) {
+        setProductForm((prev) => ({ ...prev, description: data.description }));
+        setDescGenBadge(
+          data.usedImage
+            ? 'SEO Copy Generated from Image + Metadata'
+            : 'SEO Copy Generated from Garment Metadata'
+        );
+        setTimeout(() => setDescGenBadge(null), 5000);
+      }
+    } catch (err: any) {
+      console.error('Error generating SEO description:', err);
+      setFormError(err.message || 'Could not generate SEO description. Please try again.');
+    } finally {
+      setGeneratingDesc(false);
+    }
+  };
 
   // Hero Save
   const handleSaveHero = async (overrideUrl?: string) => {
@@ -989,17 +1038,41 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
                   {/* Description */}
                   <div className="space-y-2 md:col-span-2">
-                    <label className="text-xs uppercase tracking-widest text-neutral-300 font-mono block">
-                      Considered Product Description (Optional)
-                    </label>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <label className="text-xs uppercase tracking-widest text-neutral-300 font-mono block">
+                        Considered Product Description (SEO Ready)
+                      </label>
+
+                      <div className="flex items-center gap-3">
+                        {descGenBadge && (
+                          <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-400 flex items-center gap-1">
+                            <Check size={12} />
+                            <span>{descGenBadge}</span>
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={handleGenerateSeoDescription}
+                          disabled={generatingDesc}
+                          className="border border-amber-400/60 bg-amber-400/10 hover:bg-amber-400 hover:text-black text-amber-300 px-3.5 py-1.5 text-[11px] uppercase tracking-wider font-mono font-semibold flex items-center gap-1.5 transition-all disabled:opacity-50"
+                        >
+                          <Sparkles size={13} className={generatingDesc ? 'animate-spin' : ''} />
+                          <span>
+                            {generatingDesc
+                              ? 'Analyzing Image & Metadata...'
+                              : 'Generate SEO Description'}
+                          </span>
+                        </button>
+                      </div>
+                    </div>
                     <textarea
                       rows={3}
                       value={productForm.description}
                       onChange={(e) =>
                         setProductForm({ ...productForm, description: e.target.value })
                       }
-                      placeholder="Double-breasted heavyweight wool-crepe blend with architectural storm flaps..."
-                      className="w-full bg-black border border-neutral-800 text-xs px-4 py-3 font-sans text-white focus:border-white focus:outline-none"
+                      placeholder="Click 'Generate SEO Description' above to craft tailored SEO copy from your garment's name, category, sizes, and photo..."
+                      className="w-full bg-black border border-neutral-800 text-xs px-4 py-3 font-sans text-white focus:border-white focus:outline-none leading-relaxed"
                     />
                   </div>
                 </div>

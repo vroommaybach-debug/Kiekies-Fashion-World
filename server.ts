@@ -3,9 +3,19 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { GoogleGenAI, GenerateContentResponse } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+  httpOptions: {
+    headers: {
+      'User-Agent': 'aistudio-build',
+    },
+  },
+});
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -242,6 +252,120 @@ function writeDb(data: any) {
 }
 
 // --- API ROUTES ---
+
+// 0. AI SEO Product Description Generator (Multimodal Image + Metadata)
+app.post('/api/generate-description', async (req, res) => {
+  try {
+    const { name, category, sizes, price, imageUrl } = req.body;
+
+    if (!name && !imageUrl) {
+      return res.status(400).json({
+        error: 'Please enter a Garment Name or provide a Primary Image first.',
+      });
+    }
+
+    const parts: any[] = [];
+
+    // Attempt to attach the primary product image for visual analysis
+    if (imageUrl && typeof imageUrl === 'string') {
+      const trimmedUrl = imageUrl.trim();
+      const dataUrlMatch = trimmedUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+
+      if (dataUrlMatch && dataUrlMatch[1] && dataUrlMatch[2]) {
+        parts.push({
+          inlineData: {
+            mimeType: dataUrlMatch[1],
+            data: dataUrlMatch[2],
+          },
+        });
+      } else if (trimmedUrl.startsWith('/uploads/')) {
+        const localFile = path.join(PUBLIC_DIR, trimmedUrl.replace(/^\//, ''));
+        if (fs.existsSync(localFile)) {
+          const buf = fs.readFileSync(localFile);
+          const ext = path.extname(localFile).toLowerCase();
+          const mimeType =
+            ext === '.png'
+              ? 'image/png'
+              : ext === '.webp'
+              ? 'image/webp'
+              : 'image/jpeg';
+          parts.push({
+            inlineData: {
+              mimeType,
+              data: buf.toString('base64'),
+            },
+          });
+        }
+      } else if (trimmedUrl.startsWith('http://') || trimmedUrl.startsWith('https://')) {
+        try {
+          let fetchUrl = trimmedUrl;
+          const driveMatch =
+            trimmedUrl.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) ||
+            trimmedUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+          if (driveMatch && driveMatch[1]) {
+            fetchUrl = `https://lh3.googleusercontent.com/d/${driveMatch[1]}`;
+          }
+
+          const imgRes = await fetch(fetchUrl, {
+            headers: {
+              'User-Agent':
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            },
+          });
+          const contentType = imgRes.headers.get('content-type') || '';
+          if (imgRes.ok && contentType.startsWith('image/')) {
+            const arrBuf = await imgRes.arrayBuffer();
+            const base64Data = Buffer.from(arrBuf).toString('base64');
+            parts.push({
+              inlineData: {
+                mimeType: contentType.split(';')[0],
+                data: base64Data,
+              },
+            });
+          }
+        } catch (imgErr) {
+          console.warn('Could not fetch remote image for Gemini analysis, falling back to metadata:', imgErr);
+        }
+      }
+    }
+
+    const promptText = `You are the Senior Luxury Fashion Copywriter and SEO Strategist for Kiekies Fashion, a contemporary luxury Nigerian fashion house and atelier based in Lagos.
+
+Write a captivating, high-converting, SEO-optimized product description for this piece based on the following metadata${parts.length > 0 ? ' and the attached garment photograph' : ''}:
+- Garment Name: ${name || 'Atelier Signature Piece'}
+- Collection Category: ${category || 'women'}
+- Available Sizes: ${sizes || 'Bespoke & Ready-to-Wear'}
+${price ? `- Price: ₦${Number(price).toLocaleString()}` : ''}
+
+Instructions:
+1. If an image is attached, closely inspect and describe the garment's true visual attributes: exact color palette/saturation, silhouette, drape, collar/neckline, sleeve architecture, fabric texture, and tailoring details.
+2. Naturally weave in high-value SEO keywords relevant to the category (${category || 'luxury fashion'}), the garment name (${name || ''}), Nigerian contemporary luxury tailoring, Lagos ready-to-wear, and size availability (${sizes || ''}).
+3. Keep the tone poised, architectural, editorial, and authoritative ("Bold Restraint").
+4. Output ONLY 2 to 3 rich, polished sentences (around 35 to 65 words, plain text only, no markdown headings, no bullet points, no surrounding quotation marks).`;
+
+    parts.push({ text: promptText });
+
+    const response: GenerateContentResponse = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: { parts },
+    });
+
+    const generatedText = response.text?.trim() || '';
+    if (!generatedText) {
+      return res.status(500).json({ error: 'Model returned an empty description.' });
+    }
+
+    return res.json({
+      description: generatedText,
+      usedImage: parts.length > 1,
+    });
+  } catch (err: any) {
+    console.error('Gemini description generation error:', err);
+    return res.status(500).json({
+      error: err.message || 'Failed to generate SEO description with Gemini.',
+    });
+  }
+});
 
 // 1. Upload File & Return Universal Permanent URL
 app.post('/api/upload', (req, res) => {
