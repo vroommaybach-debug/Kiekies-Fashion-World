@@ -94,6 +94,14 @@ export const Footer: React.FC = () => {
                   Shopping Bag
                 </button>
               </li>
+              <li>
+                <button
+                  onClick={() => navigate('/admin')}
+                  className="text-[11px] text-neutral-500 hover:text-neutral-300 transition-colors"
+                >
+                  Admin Panel
+                </button>
+              </li>
             </ul>
           </div>
         </div>
