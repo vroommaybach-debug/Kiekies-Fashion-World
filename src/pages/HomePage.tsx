@@ -17,8 +17,12 @@ interface HomePageProps {
 }
 
 export const HomePage: React.FC<HomePageProps> = ({ products, siteConfig }) => {
-  // Find featured product for Section 5 (Editorial Spread)
-  const featuredProduct = products.find((p) => p.featured) || products[0] || null;
+  // Find featured / best seller centerpiece product
+  const featuredProduct =
+    products.find((p) => p.featured) ||
+    products.find((p) => p.best_seller) ||
+    products[0] ||
+    null;
 
   const organizationSchema = {
     '@context': 'https://schema.org',
@@ -53,16 +57,16 @@ export const HomePage: React.FC<HomePageProps> = ({ products, siteConfig }) => {
       {/* 2. BRAND STATEMENT — "The Thesis" */}
       <BrandThesisSection />
 
-      {/* 3. SHOP BY CATEGORY — "Four Doors" */}
-      <CategoryFourDoorsSection categoryHeroes={siteConfig.category_heroes} />
-
-      {/* 4. NEW ARRIVALS — "The Pulse" */}
-      <NewArrivalsSection products={products} />
-
-      {/* 5. SIGNATURE LOOK — "The Editorial Spread" */}
+      {/* 3. BEST SELLER SPOTLIGHT — Directly before Shop By Category */}
       <SignatureLookSection product={featuredProduct} />
 
-      {/* 6. BEST SELLERS — "Social Proof Without Saying It" */}
+      {/* 4. SHOP BY CATEGORY — "Four Doors" */}
+      <CategoryFourDoorsSection categoryHeroes={siteConfig.category_heroes} />
+
+      {/* 5. NEW ARRIVALS — "The Pulse" */}
+      <NewArrivalsSection products={products} />
+
+      {/* 6. PERMANENT FOUNDATIONS — Collection Grid */}
       <BestSellersSection products={products} />
 
       {/* 7. THE KIEKIES PROMISE — "Why Trust Us" */}

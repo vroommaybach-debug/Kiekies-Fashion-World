@@ -222,7 +222,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({ heroImageUrl }) => {
               e.currentTarget.style.color = '#000000';
             }}
           >
-            Explore Full Color
+            Explore Full Catalog
           </button>
 
           <button

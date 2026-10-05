@@ -88,7 +88,7 @@ export const BestSellersSection: React.FC<BestSellersSectionProps> = ({ products
         <div className="flex flex-col md:flex-row md:items-end justify-between mb-16 gap-4">
           <div>
             <span className="block text-[10px] tracking-[0.4em] uppercase text-neutral-400 mb-3 font-mono">
-              Quiet Provenance
+              Best Sellers · Quiet Provenance
             </span>
             <h2 className="font-serif text-3xl md:text-5xl tracking-wide uppercase font-light text-white">
               Permanent Foundations

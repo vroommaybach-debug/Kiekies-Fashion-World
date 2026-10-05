@@ -98,17 +98,22 @@ export const SignatureLookSection: React.FC<SignatureLookSectionProps> = ({ prod
 
       <div className="max-w-7xl mx-auto relative z-10">
         {/* Section Header */}
-        <div className="flex items-center justify-between mb-16 border-b border-neutral-800 pb-4">
-          <div className="flex items-center gap-2">
-            <Sparkles size={14} style={{ color: palette.accent }} />
-            <span
-              className="text-[10px] tracking-[0.4em] uppercase font-mono"
-              style={{ color: palette.accent }}
-            >
-              Issue No. 04 · Signature Look
-            </span>
+        <div className="flex flex-col md:flex-row md:items-end justify-between mb-16 border-b border-neutral-800 pb-6 gap-4">
+          <div>
+            <div className="flex items-center gap-2.5 mb-3">
+              <Sparkles size={18} style={{ color: palette.accent }} />
+              <span
+                className="text-xs sm:text-sm tracking-[0.4em] uppercase font-mono font-semibold"
+                style={{ color: palette.accent }}
+              >
+                Atelier Spotlight · Most Coveted
+              </span>
+            </div>
+            <h2 className="font-serif text-4xl sm:text-5xl md:text-6xl tracking-wide uppercase font-light text-white">
+              Best Seller
+            </h2>
           </div>
-          <span className="text-[10px] tracking-[0.3em] uppercase text-neutral-400 font-mono hidden sm:inline">
+          <span className="text-xs tracking-[0.3em] uppercase text-neutral-300 font-mono">
             Atelier Centerpiece
           </span>
         </div>
