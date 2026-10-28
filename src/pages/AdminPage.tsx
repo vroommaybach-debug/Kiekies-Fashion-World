@@ -15,6 +15,8 @@ import { useRouter } from '../lib/router';
 import { MetaSEO } from '../components/MetaSEO';
 import { normalizeImageUrl, isGoogleDriveUrl } from '../lib/driveHelper';
 import { extractPaletteFromImage } from '../lib/colorExtractor';
+import { inspectProductVisualSpecifics, VisualSpecificsProfile } from '../lib/studioEngine';
+import { AtelierPhotoStudio } from '../components/admin/AtelierPhotoStudio';
 import {
   Shield,
   Key,
@@ -132,90 +134,111 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   const [formError, setFormError] = useState<string | null>(null);
   const [generatingDesc, setGeneratingDesc] = useState(false);
   const [descGenBadge, setDescGenBadge] = useState<string | null>(null);
+  const [adminSpecifics, setAdminSpecifics] = useState<string>('');
+  const [seoWebBio, setSeoWebBio] = useState<string>('');
+  const [copiedBio, setCopiedBio] = useState<boolean>(false);
+  const [visualProfile, setVisualProfile] = useState<VisualSpecificsProfile | null>(null);
 
-  // Client-side SEO fallback synthesizer utilizing any 1 or all available fields + image palette
-  const buildClientSeoFallback = (colorName?: string): string => {
+  // Automatically inspect uploaded product image for pinpoint color, sheen & silhouette specifics
+  useEffect(() => {
+    const firstGallery = productForm.gallery_urls
+      ? productForm.gallery_urls.split('\n').map((s) => s.trim()).find(Boolean) || ''
+      : '';
+    const activeImg = productForm.image_url.trim() || firstGallery;
+    if (!activeImg) {
+      setVisualProfile(null);
+      return;
+    }
+
+    let cancelled = false;
+    inspectProductVisualSpecifics(activeImg, productForm.category).then((profile) => {
+      if (!cancelled) {
+        setVisualProfile(profile);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [productForm.image_url, productForm.gallery_urls, productForm.category]);
+
+  // Client-side Pinpoint Product & Search/Web Bio synthesizer utilizing any 1 or all available fields + optical profile
+  const buildClientPinpointCopy = (profile: VisualSpecificsProfile | null): {
+    description: string;
+    seoBio: string;
+  } => {
     const rawName = productForm.name.trim();
     const cat = (productForm.category || 'women').toLowerCase();
     const rawSizes = productForm.sizes.trim();
     const rawPrice = String(productForm.price || '').trim();
-    const cleanColor = (colorName || '').replace(/Atelier\s+/i, '').trim().toLowerCase();
+    const rawSpec = adminSpecifics.trim();
+
+    const primaryColor = profile?.primaryColorName || 'Obsidian & Burnished Gold';
+    const secondaryColor = profile?.secondaryColorName || '';
+    const finish = profile?.surfaceFinish || 'hand-selected luxury cloth';
+    const silhouette = profile?.silhouetteNote || 'architectural Lagos tailoring';
 
     const colorPhrase =
-      cleanColor && cleanColor !== 'gold'
-        ? `rendered in luminous ${cleanColor} tones and `
-        : '';
+      secondaryColor && secondaryColor !== primaryColor
+        ? `${primaryColor} with ${secondaryColor} undertones`
+        : primaryColor;
+
+    const specificsSentence = rawSpec
+      ? ` Distinguished by ${rawSpec.replace(/\.$/, '')}.`
+      : '';
+
     const sizeClause = rawSizes
       ? ` Available in ${rawSizes} with direct Lagos atelier consultation and nationwide delivery.`
       : ' Available for immediate acquisition and bespoke styling consultation via our Lagos atelier.';
-    const priceClause = rawPrice
-      ? ` Valuation: ${formatNGN(Number(rawPrice) || 0)}.`
-      : '';
+
+    const priceFormatted = rawPrice ? formatNGN(Number(rawPrice) || 0) : '';
+
+    let description = '';
+    let title = rawName;
 
     if (cat === 'accessories') {
-      const title = rawName || 'Artisanal Atelier Accessory';
-      return `${title} is a sculptural luxury accessory ${colorPhrase}hand-finished by Kiekies Fashion with architectural precision, supple full-grain textures, and custom-polished hardware. Designed to elevate contemporary Nigerian ready-to-wear and formal evening ensembles with enduring poise.${sizeClause}${priceClause}`;
+      title = rawName || `The ${primaryColor} Atelier Accessory`;
+      description = `${title} is a sculptural luxury accessory rendered in ${colorPhrase}, crafted with ${finish.toLowerCase()} and ${silhouette.toLowerCase()}.${specificsSentence} Hand-finished by Kiekies Fashion to anchor contemporary Nigerian ready-to-wear and formal evening ensembles.${sizeClause}`;
+    } else if (cat === 'men') {
+      title = rawName || `The ${primaryColor} Sovereign Menswear Piece`;
+      description = `${title} exemplifies contemporary Nigerian menswear tailoring in ${colorPhrase}, featuring ${finish.toLowerCase()} and ${silhouette.toLowerCase()}.${specificsSentence} Engineered by Kiekies Fashion for commanding presence across ceremonial occasions and executive settings.${sizeClause}`;
+    } else if (cat === 'kids') {
+      title = rawName || `The ${primaryColor} Junior Heritage Piece`;
+      description = `${title} brings Kiekies Fashion's signature architectural tailoring to junior couture in ${colorPhrase}, crafted from ${finish.toLowerCase()} with ${silhouette.toLowerCase()}.${specificsSentence} Thoughtfully proportioned for breathable comfort, durability, and standout family occasions.${sizeClause}`;
+    } else {
+      title = rawName || `The ${primaryColor} Atelier Silhouette`;
+      description = `${title} is a contemporary luxury statement from Kiekies Fashion drenched in ${colorPhrase}, sculpted in ${finish.toLowerCase()} with ${silhouette.toLowerCase()}.${specificsSentence} Created in our Lagos workshop for effortless authority from high-stakes boardrooms to evening galas.${sizeClause}`;
     }
 
-    if (cat === 'men') {
-      const title = rawName || 'Sovereign Tailored Menswear Piece';
-      return `${title} exemplifies contemporary Nigerian menswear tailoring, ${colorPhrase}cut with razor-sharp shoulder architecture, breathable luxury cloth, and refined artisanal detailing. Engineered by Kiekies Fashion for commanding presence across ceremonial occasions and executive settings.${sizeClause}${priceClause}`;
-    }
+    const seoBioParts = [
+      `${title} by Kiekies Fashion (Lagos).`,
+      `${colorPhrase} · ${finish}.`,
+      rawSpec ? `${rawSpec.replace(/\.$/, '')}.` : '',
+      rawSizes ? `Sizes: ${rawSizes}.` : '',
+      priceFormatted ? `${priceFormatted} ·` : '',
+      'Direct WhatsApp concierge & nationwide delivery.',
+    ].filter(Boolean);
 
-    if (cat === 'kids') {
-      const title = rawName || 'Junior Heritage Atelier Garment';
-      return `${title} brings Kiekies Fashion's signature architectural tailoring to junior couture, ${colorPhrase}crafted from ultra-soft, breathable heritage textiles for effortless movement and celebratory polish. Thoughtfully proportioned for comfort, durability, and standout family occasions.${sizeClause}${priceClause}`;
-    }
-
-    const title = rawName || 'Signature Atelier Silhouette';
-    return `${title} is a contemporary luxury statement from Kiekies Fashion, ${colorPhrase}sculpted with uncompromised drape, structured tailoring, and rich fabric depth. Created in our Lagos workshop for effortless authority from high-stakes boardrooms to evening galas.${sizeClause}${priceClause}`;
+    const seoBio = seoBioParts.join(' ').replace(/\s+/g, ' ').trim();
+    return { description, seoBio };
   };
 
-  // AI SEO Description Generator (Utilizes ANY 1 or ALL available fields + Image Vision)
+  // AI Pinpoint Product Description & Search/Web Bio Generator (Utilizes ANY 1 or ALL available fields + Image Vision)
   const handleGenerateSeoDescription = async () => {
     setFormError(null);
     setDescGenBadge(null);
     setGeneratingDesc(true);
 
-    // Pick primary image or first gallery image if present
     const firstGalleryUrl = productForm.gallery_urls
       ? productForm.gallery_urls.split('\n').map((s) => s.trim()).find(Boolean) || ''
       : '';
     const activeImageUrl = productForm.image_url.trim() || firstGalleryUrl;
 
-    // Extract visual color palette from the image if available
-    const detectedColor = await new Promise<string>((resolve) => {
-      if (!activeImageUrl) {
-        resolve('');
-        return;
-      }
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (!settled) {
-          settled = true;
-          resolve('');
-        }
-      }, 1200);
+    const inspectedProfile =
+      visualProfile || (await inspectProductVisualSpecifics(activeImageUrl, productForm.category));
+    setVisualProfile(inspectedProfile);
 
-      extractPaletteFromImage(activeImageUrl, (palette) => {
-        if (!settled) {
-          settled = true;
-          clearTimeout(timer);
-          if (!palette || !palette.rgb) {
-            resolve('');
-            return;
-          }
-          const [r, g, b] = palette.rgb;
-          let tone = 'obsidian & warm gold';
-          if (r > 180 && g > 110 && b < 90) tone = 'burnished saffron amber';
-          else if (r > 170 && g < 80 && b < 100) tone = 'deep carmine crimson';
-          else if (b > 160 && r < 100) tone = 'imperial cobalt blue';
-          else if (g > 130 && r < 100) tone = 'malachite emerald';
-          else if (r > 140 && b > 140) tone = 'regal amethyst';
-          resolve(tone);
-        }
-      });
-    });
+    const localFallback = buildClientPinpointCopy(inspectedProfile);
 
     try {
       const response = await fetch('/api/generate-description', {
@@ -226,42 +249,44 @@ export const AdminPage: React.FC<AdminPageProps> = ({
           category: productForm.category,
           sizes: productForm.sizes.trim(),
           price: productForm.price,
-          imageUrl: activeImageUrl,
-          galleryUrls: productForm.gallery_urls,
-          colorHint: detectedColor,
+          specifics: adminSpecifics.trim(),
+          imageUrl: inspectedProfile.compactVisionDataUrl || activeImageUrl,
+          colorHint: inspectedProfile.primaryColorName,
+          secondaryColorHint: inspectedProfile.secondaryColorName,
+          surfaceFinish: inspectedProfile.surfaceFinish,
+          silhouetteNote: inspectedProfile.silhouetteNote,
         }),
       });
 
       const rawText = await response.text();
-      let data: { description?: string; usedImage?: boolean; error?: string } = {};
+      let data: { description?: string; seoBio?: string; usedImage?: boolean } = {};
       try {
         data = rawText ? JSON.parse(rawText) : {};
       } catch {
-        data = {
-          description: buildClientSeoFallback(detectedColor),
-          usedImage: Boolean(activeImageUrl),
-        };
+        data = localFallback;
       }
 
       const finalDescription =
-        (data.description && data.description.trim()) ||
-        buildClientSeoFallback(detectedColor);
+        (data.description && data.description.trim()) || localFallback.description;
+      const finalSeoBio =
+        (data.seoBio && data.seoBio.trim()) || localFallback.seoBio;
 
       setProductForm((prev) => ({ ...prev, description: finalDescription }));
+      setSeoWebBio(finalSeoBio);
       setDescGenBadge(
         activeImageUrl
-          ? 'SEO Copy Generated from Image + Available Fields'
-          : 'SEO Copy Generated from Available Fields'
+          ? 'Pinpoint Copy & Web Bio Generated from Photo + Specifics'
+          : 'Pinpoint Copy & Web Bio Generated from Specifics'
       );
       setTimeout(() => setDescGenBadge(null), 5000);
     } catch (err) {
-      console.warn('Using client SEO synthesizer fallback:', err);
-      const fallbackDesc = buildClientSeoFallback(detectedColor);
-      setProductForm((prev) => ({ ...prev, description: fallbackDesc }));
+      console.warn('Using client pinpoint SEO synthesizer fallback:', err);
+      setProductForm((prev) => ({ ...prev, description: localFallback.description }));
+      setSeoWebBio(localFallback.seoBio);
       setDescGenBadge(
         activeImageUrl
-          ? 'SEO Copy Generated from Image + Available Fields'
-          : 'SEO Copy Generated from Available Fields'
+          ? 'Pinpoint Copy & Web Bio Generated from Photo + Specifics'
+          : 'Pinpoint Copy & Web Bio Generated from Specifics'
       );
       setTimeout(() => setDescGenBadge(null), 5000);
     } finally {
@@ -680,7 +705,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
               </div>
 
 
-              {/* Live Preview */}
+              {/* Live Preview + Inline AI Photo Studio for Hero */}
               <div className="space-y-2">
                 <span className="text-[10px] uppercase tracking-widest text-neutral-400 font-mono block">
                   Live Viewport Preview
@@ -697,6 +722,16 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                     </span>
                   </div>
                 </div>
+
+                <AtelierPhotoStudio
+                  sourceImageUrl={heroImage}
+                  aspectRatio="16:9"
+                  slotLabel="Homepage Hero Banner"
+                  onApplyImage={async (newUrl) => {
+                    setHeroImage(newUrl);
+                    await handleSaveHero(newUrl);
+                  }}
+                />
               </div>
 
               <div className="flex items-center gap-4 pt-4 border-t border-neutral-900">
@@ -774,6 +809,16 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                       className="w-full h-full object-cover"
                     />
                   </div>
+                  <AtelierPhotoStudio
+                    sourceImageUrl={categoryHeroes.women}
+                    aspectRatio="3:4"
+                    slotLabel="Women's Door"
+                    onApplyImage={async (newUrl) => {
+                      const next = { ...categoryHeroes, women: newUrl };
+                      setCategoryHeroes(next);
+                      await handleSaveCategoryHeroes(next);
+                    }}
+                  />
                 </div>
 
                 {/* Men */}
@@ -817,6 +862,16 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                       className="w-full h-full object-cover"
                     />
                   </div>
+                  <AtelierPhotoStudio
+                    sourceImageUrl={categoryHeroes.men}
+                    aspectRatio="3:4"
+                    slotLabel="Men's Door"
+                    onApplyImage={async (newUrl) => {
+                      const next = { ...categoryHeroes, men: newUrl };
+                      setCategoryHeroes(next);
+                      await handleSaveCategoryHeroes(next);
+                    }}
+                  />
                 </div>
 
                 {/* Kids */}
@@ -860,6 +915,16 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                       className="w-full h-full object-cover"
                     />
                   </div>
+                  <AtelierPhotoStudio
+                    sourceImageUrl={categoryHeroes.kids}
+                    aspectRatio="3:4"
+                    slotLabel="Kids' Door"
+                    onApplyImage={async (newUrl) => {
+                      const next = { ...categoryHeroes, kids: newUrl };
+                      setCategoryHeroes(next);
+                      await handleSaveCategoryHeroes(next);
+                    }}
+                  />
                 </div>
 
                 {/* Accessories */}
@@ -903,6 +968,16 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                       className="w-full h-full object-cover"
                     />
                   </div>
+                  <AtelierPhotoStudio
+                    sourceImageUrl={categoryHeroes.accessories}
+                    aspectRatio="3:4"
+                    slotLabel="Accessories Door"
+                    onApplyImage={async (newUrl) => {
+                      const next = { ...categoryHeroes, accessories: newUrl };
+                      setCategoryHeroes(next);
+                      await handleSaveCategoryHeroes(next);
+                    }}
+                  />
                 </div>
               </div>
 
@@ -1094,11 +1169,23 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                       </div>
                     )}
                     {productForm.image_url && (
-                      <div className="w-16 h-20 bg-neutral-900 border border-neutral-800 overflow-hidden mt-1">
-                        <img
-                          src={productForm.image_url}
-                          alt="Primary preview"
-                          className="w-full h-full object-cover"
+                      <div className="space-y-2 pt-1">
+                        <div className="w-24 h-32 bg-neutral-900 border border-neutral-800 overflow-hidden">
+                          <img
+                            src={productForm.image_url}
+                            alt="Primary preview"
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+
+                        {/* Inline 20-Backdrop AI Photo Studio for Primary Product Image */}
+                        <AtelierPhotoStudio
+                          sourceImageUrl={productForm.image_url}
+                          aspectRatio="3:4"
+                          slotLabel="Primary Product Photo"
+                          onApplyImage={(retouchedUrl) =>
+                            setProductForm((prev) => ({ ...prev, image_url: retouchedUrl }))
+                          }
                         />
                       </div>
                     )}
@@ -1145,16 +1232,21 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                     />
                   </div>
 
-                  {/* Description */}
-                  <div className="space-y-2 md:col-span-2">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <label className="text-xs uppercase tracking-widest text-neutral-300 font-mono block">
-                        Considered Product Description (SEO Ready)
-                      </label>
+                  {/* PINPOINT PRODUCT SPECIFICS & SEARCH / WEB BIO SUITE */}
+                  <div className="space-y-5 md:col-span-2 border border-neutral-800 bg-black p-5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-neutral-900 pb-4">
+                      <div>
+                        <h3 className="font-serif text-lg text-white font-light tracking-wide">
+                          Pinpoint Product Description & Search / Web Bio Suite
+                        </h3>
+                        <p className="text-xs text-neutral-400 mt-0.5">
+                          Extracts real color, fabric sheen & silhouette specifics from your photo alongside any admin notes.
+                        </p>
+                      </div>
 
                       <div className="flex items-center gap-3">
                         {descGenBadge && (
-                          <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-400 flex items-center gap-1">
+                          <span className="text-[11px] font-mono text-emerald-400 flex items-center gap-1">
                             <Check size={12} />
                             <span>{descGenBadge}</span>
                           </span>
@@ -1163,26 +1255,118 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                           type="button"
                           onClick={handleGenerateSeoDescription}
                           disabled={generatingDesc}
-                          className="border border-amber-400/60 bg-amber-400/10 hover:bg-amber-400 hover:text-black text-amber-300 px-3.5 py-1.5 text-[11px] uppercase tracking-wider font-mono font-semibold flex items-center gap-1.5 transition-all disabled:opacity-50"
+                          className="border border-amber-400 bg-amber-400 hover:bg-amber-300 text-black px-4 py-2 text-xs uppercase tracking-wider font-mono font-semibold flex items-center gap-2 transition-all disabled:opacity-50 whitespace-nowrap shrink-0"
                         >
                           <Sparkles size={13} className={generatingDesc ? 'animate-spin' : ''} />
                           <span>
                             {generatingDesc
-                              ? 'Analyzing Image & Metadata...'
-                              : 'Generate SEO Description'}
+                              ? 'Inspecting Specifics...'
+                              : 'Generate Pinpoint Description & Web Bio'}
                           </span>
                         </button>
                       </div>
                     </div>
-                    <textarea
-                      rows={3}
-                      value={productForm.description}
-                      onChange={(e) =>
-                        setProductForm({ ...productForm, description: e.target.value })
-                      }
-                      placeholder="Click 'Generate SEO Description' above to craft tailored SEO copy from your garment's name, category, sizes, and photo..."
-                      className="w-full bg-black border border-neutral-800 text-xs px-4 py-3 font-sans text-white focus:border-white focus:outline-none leading-relaxed"
-                    />
+
+                    {/* Live Detected Optical Specifics from Uploaded Photo */}
+                    {visualProfile && (
+                      <div className="flex flex-wrap items-center gap-3 text-xs font-mono text-neutral-300 bg-neutral-950 p-3 border border-neutral-900">
+                        <span className="text-neutral-500 uppercase">Detected Photo Specifics:</span>
+                        <span className="flex items-center gap-1.5">
+                          <span
+                            className="w-3 h-3 inline-block border border-white/30"
+                            style={{ backgroundColor: visualProfile.primaryHex }}
+                          />
+                          <span>{visualProfile.primaryColorName}</span>
+                        </span>
+                        <span aria-hidden="true">·</span>
+                        <span className="flex items-center gap-1.5">
+                          <span
+                            className="w-3 h-3 inline-block border border-white/30"
+                            style={{ backgroundColor: visualProfile.secondaryHex }}
+                          />
+                          <span>{visualProfile.secondaryColorName}</span>
+                        </span>
+                        <span aria-hidden="true">·</span>
+                        <span className="text-amber-300">{visualProfile.surfaceFinish}</span>
+                      </div>
+                    )}
+
+                    {/* Optional Admin Specifics Input */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs uppercase tracking-widest text-neutral-300 font-mono block">
+                        Garment / Accessory Specifics & Construction Notes (Optional — e.g. fabric, clasp, lapel, beading)
+                      </label>
+                      <input
+                        type="text"
+                        value={adminSpecifics}
+                        onChange={(e) => setAdminSpecifics(e.target.value)}
+                        placeholder="e.g. Heavyweight Italian barathea wool, brushed brass buckle, hand-embroidered cuff, satin lining..."
+                        className="w-full bg-neutral-950 border border-neutral-800 text-xs px-4 py-2.5 font-sans text-white focus:border-white focus:outline-none"
+                      />
+                    </div>
+
+                    {/* Output 1: Pinpoint Product Description */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs uppercase tracking-widest text-neutral-300 font-mono block">
+                        1. Pinpoint Product Description (Displayed on Product Page & Catalog)
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={productForm.description}
+                        onChange={(e) =>
+                          setProductForm({ ...productForm, description: e.target.value })
+                        }
+                        placeholder="Click 'Generate Pinpoint Description & Web Bio' above to craft detail-rich product copy from any 1 or all fields..."
+                        className="w-full bg-neutral-950 border border-neutral-800 text-xs px-4 py-3 font-sans text-white focus:border-white focus:outline-none leading-relaxed"
+                      />
+                    </div>
+
+                    {/* Output 2: Search Engine & Web Bio Snippet */}
+                    <div className="space-y-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <label className="text-xs uppercase tracking-widest text-amber-300 font-mono block">
+                          2. Search Engine & Web Bio Snippet (Google SEO Meta · Instagram / WhatsApp Catalog Bio)
+                        </label>
+                        {seoWebBio && (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard?.writeText(seoWebBio);
+                                setCopiedBio(true);
+                                setTimeout(() => setCopiedBio(false), 2500);
+                              }}
+                              className="px-2.5 py-1 border border-neutral-700 hover:border-white text-[11px] font-mono uppercase text-neutral-300 hover:text-white transition-colors"
+                            >
+                              {copiedBio ? 'Copied Bio' : 'Copy Web Bio'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!productForm.description.includes(seoWebBio)) {
+                                  setProductForm((prev) => ({
+                                    ...prev,
+                                    description: prev.description
+                                      ? `${prev.description.trim()}\n\n${seoWebBio}`
+                                      : seoWebBio,
+                                  }));
+                                }
+                              }}
+                              className="px-2.5 py-1 border border-amber-400/50 hover:border-amber-400 text-[11px] font-mono uppercase text-amber-300 transition-colors"
+                            >
+                              Append to Product Copy
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      <textarea
+                        rows={2}
+                        value={seoWebBio}
+                        onChange={(e) => setSeoWebBio(e.target.value)}
+                        placeholder="Pinpoint Google Search & Social Web Bio snippet will appear here automatically when generated..."
+                        className="w-full bg-neutral-950 border border-neutral-800 text-xs px-4 py-2.5 font-mono text-amber-100 focus:border-amber-400 focus:outline-none leading-relaxed"
+                      />
+                    </div>
                   </div>
                 </div>
 

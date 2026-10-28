@@ -253,60 +253,127 @@ function writeDb(data: any) {
 
 // --- API ROUTES ---
 
-// 0. AI SEO Product Description Generator (Multimodal Image + Any Combination of Fields)
+// 0. AI Pinpoint Product Description & Search/Web Bio Generator (Multimodal Image + Specifics)
 function synthesizeLuxurySeoDescription(params: {
   name?: string;
   category?: string;
   sizes?: string;
   price?: string | number;
+  specifics?: string;
   colorHint?: string;
+  secondaryColorHint?: string;
+  surfaceFinish?: string;
+  silhouetteNote?: string;
   hasImage?: boolean;
-}): string {
+}): { description: string; seoBio: string } {
   const rawName = (params.name || '').trim();
   const cat = (params.category || 'women').trim().toLowerCase();
   const rawSizes = (params.sizes || '').trim();
-  const colorTone = (params.colorHint || '').trim();
+  const rawPrice =
+    params.price !== undefined && params.price !== null && String(params.price).trim() !== ''
+      ? `₦${Number(params.price).toLocaleString()}`
+      : '';
+  const rawSpecifics = (params.specifics || '').trim();
+  const primaryColor = (params.colorHint || 'Obsidian & Gold').trim();
+  const secondaryColor = (params.secondaryColorHint || '').trim();
+  const finish = (params.surfaceFinish || '').trim();
+  const silhouette = (params.silhouetteNote || '').trim();
+
+  const colorDescriptor =
+    secondaryColor && secondaryColor !== primaryColor
+      ? `${primaryColor} with ${secondaryColor} undertones`
+      : primaryColor;
+
+  const specificsClause = rawSpecifics
+    ? ` Distinguished by ${rawSpecifics.replace(/\.$/, '')}.`
+    : '';
+
+  const finishClause = finish
+    ? ` Crafted in ${finish.toLowerCase()}`
+    : ' Crafted from hand-selected luxury cloth';
+
+  const silhouetteClause = silhouette
+    ? ` with ${silhouette.toLowerCase()}.`
+    : ' with architectural Lagos tailoring.';
 
   const sizeClause = rawSizes
     ? ` Available in ${rawSizes} with bespoke Lagos atelier consultation and direct nationwide fulfillment.`
     : ' Available for immediate acquisition and private styling consultation via our Lagos atelier.';
 
-  const colorPrefix = colorTone ? `rendered in rich ${colorTone} tones and ` : '';
+  let description = '';
+  let pieceTitle = rawName;
 
   if (cat === 'accessories') {
-    const pieceTitle = rawName || 'Artisanal Atelier Accessory';
-    return `${pieceTitle} is a sculptural luxury accessory ${colorPrefix}hand-finished by Kiekies Fashion with architectural precision, supple full-grain textures, and custom-polished hardware. Designed to anchor contemporary Nigerian ready-to-wear and evening ensembles with enduring poise.${sizeClause}`;
+    pieceTitle = rawName || `The ${primaryColor} Atelier Accessory`;
+    description = `${pieceTitle} is a sculptural luxury accessory rendered in ${colorDescriptor}.${finishClause}${silhouetteClause}${specificsClause} Hand-finished by Kiekies Fashion to anchor contemporary Nigerian ready-to-wear and evening ensembles.${sizeClause}`;
+  } else if (cat === 'men') {
+    pieceTitle = rawName || `The ${primaryColor} Sovereign Menswear Piece`;
+    description = `${pieceTitle} exemplifies contemporary Nigerian menswear tailoring in ${colorDescriptor}.${finishClause}${silhouetteClause}${specificsClause} Engineered by Kiekies Fashion for commanding presence across ceremonial occasions and executive settings.${sizeClause}`;
+  } else if (cat === 'kids') {
+    pieceTitle = rawName || `The ${primaryColor} Junior Heritage Piece`;
+    description = `${pieceTitle} brings Kiekies Fashion's architectural tailoring to junior couture in rich ${colorDescriptor}.${finishClause}${silhouetteClause}${specificsClause} Proportioned for breathable comfort, durability, and celebratory family occasions.${sizeClause}`;
+  } else {
+    pieceTitle = rawName || `The ${primaryColor} Atelier Silhouette`;
+    description = `${pieceTitle} is a contemporary luxury statement from Kiekies Fashion drenched in ${colorDescriptor}.${finishClause}${silhouetteClause}${specificsClause} Pressed and finished by hand in our Lagos workshop for effortless authority from high-stakes boardrooms to evening galas.${sizeClause}`;
   }
 
-  if (cat === 'men') {
-    const pieceTitle = rawName || 'Sovereign Tailored Menswear Piece';
-    return `${pieceTitle} exemplifies contemporary Nigerian menswear tailoring, ${colorPrefix}cut with razor-sharp shoulder architecture, breathable luxury cloth, and refined artisanal detailing. Engineered by Kiekies Fashion for commanding presence across ceremonial occasions and executive settings.${sizeClause}`;
-  }
+  const bioParts = [
+    `${pieceTitle} by Kiekies Fashion (Lagos).`,
+    `${colorDescriptor}${finish ? ` · ${finish}` : ''}.`,
+    rawSpecifics ? `${rawSpecifics.replace(/\.$/, '')}.` : '',
+    rawSizes ? `Sizes: ${rawSizes}.` : '',
+    rawPrice ? `${rawPrice} ·` : '',
+    'Direct WhatsApp concierge & nationwide delivery.',
+  ].filter(Boolean);
 
-  if (cat === 'kids') {
-    const pieceTitle = rawName || 'Junior Heritage Atelier Garment';
-    return `${pieceTitle} brings Kiekies Fashion's signature architectural tailoring to junior couture, ${colorPrefix}crafted from ultra-soft, breathable heritage textiles for effortless movement and celebratory polish. Thoughtfully proportioned for comfort, durability, and standout family occasions.${sizeClause}`;
-  }
-
-  const pieceTitle = rawName || 'Signature Atelier Silhouette';
-  return `${pieceTitle} is a contemporary luxury statement from Kiekies Fashion, ${colorPrefix}sculpted with uncompromised drape, structured tailoring, and luminous fabric depth. Created in our Lagos workshop for effortless authority from high-stakes boardrooms to evening galas.${sizeClause}`;
+  const seoBio = bioParts.join(' ').replace(/\s+/g, ' ').trim();
+  return { description, seoBio };
 }
 
 app.post('/api/generate-description', async (req, res) => {
   try {
-    const { name, category, sizes, price, imageUrl, galleryUrls, colorHint } = req.body || {};
+    const {
+      name,
+      category,
+      sizes,
+      price,
+      specifics,
+      imageUrl,
+      galleryUrls,
+      colorHint,
+      secondaryColorHint,
+      surfaceFinish,
+      silhouetteNote,
+    } = req.body || {};
 
     const cleanName = typeof name === 'string' ? name.trim() : '';
     const cleanCategory = typeof category === 'string' && category.trim() ? category.trim() : 'women';
     const cleanSizes = typeof sizes === 'string' ? sizes.trim() : '';
     const cleanPrice = price !== undefined && price !== null && String(price).trim() !== '' ? String(price).trim() : '';
+    const cleanSpecifics = typeof specifics === 'string' ? specifics.trim() : '';
     const cleanColorHint = typeof colorHint === 'string' ? colorHint.trim() : '';
+    const cleanSecondaryColor = typeof secondaryColorHint === 'string' ? secondaryColorHint.trim() : '';
+    const cleanSurfaceFinish = typeof surfaceFinish === 'string' ? surfaceFinish.trim() : '';
+    const cleanSilhouette = typeof silhouetteNote === 'string' ? silhouetteNote.trim() : '';
 
     // Pick primary image or first gallery image if available
     let targetImage = typeof imageUrl === 'string' ? imageUrl.trim() : '';
     if (!targetImage && typeof galleryUrls === 'string' && galleryUrls.trim()) {
       targetImage = galleryUrls.split('\n')[0].trim();
     }
+
+    const fallbackCopy = synthesizeLuxurySeoDescription({
+      name: cleanName,
+      category: cleanCategory,
+      sizes: cleanSizes,
+      price: cleanPrice,
+      specifics: cleanSpecifics,
+      colorHint: cleanColorHint,
+      secondaryColorHint: cleanSecondaryColor,
+      surfaceFinish: cleanSurfaceFinish,
+      silhouetteNote: cleanSilhouette,
+      hasImage: Boolean(targetImage),
+    });
 
     const parts: any[] = [];
 
@@ -380,69 +447,76 @@ app.post('/api/generate-description', async (req, res) => {
     if (cleanCategory) availableMetadataLines.push(`- Collection Category: ${cleanCategory}`);
     if (cleanSizes) availableMetadataLines.push(`- Available Sizes / Dimensions: ${cleanSizes}`);
     if (cleanPrice) availableMetadataLines.push(`- Price: ₦${Number(cleanPrice).toLocaleString()}`);
-    if (cleanColorHint) availableMetadataLines.push(`- Detected Visual Palette: ${cleanColorHint}`);
+    if (cleanSpecifics) availableMetadataLines.push(`- Admin Specifics (Fabric / Cut / Hardware): ${cleanSpecifics}`);
+    if (cleanColorHint) availableMetadataLines.push(`- Detected Primary Color: ${cleanColorHint}`);
+    if (cleanSecondaryColor) availableMetadataLines.push(`- Detected Secondary Tone: ${cleanSecondaryColor}`);
+    if (cleanSurfaceFinish) availableMetadataLines.push(`- Detected Material / Surface Finish: ${cleanSurfaceFinish}`);
+    if (cleanSilhouette) availableMetadataLines.push(`- Detected Silhouette / Form: ${cleanSilhouette}`);
 
     const promptText = `You are the Senior Luxury Fashion Copywriter and SEO Strategist for Kiekies Fashion, a contemporary luxury Nigerian fashion house and atelier based in Lagos.
 
-Write a captivating, high-converting, SEO-optimized product description utilizing all available inputs below${parts.length > 0 ? ' and the attached product photograph' : ''}:
+Write a pinpoint product description AND a concise Search/Web Bio utilizing all available specifics below${parts.length > 0 ? ' and the attached product photograph' : ''}:
 ${availableMetadataLines.join('\n')}
 
-Instructions:
-1. If an image is attached, closely inspect and describe the item's true visual attributes: exact color palette/saturation, silhouette, material/fabric texture, hardware or stitching details, and craftsmanship.
-2. Tailor the copy specifically to the "${cleanCategory}" category (e.g., if "accessories", focus on artisanal materials, hardware, sculptural form, and styling versatility; if "women", "men", or "kids", focus on silhouette, drape, and tailoring).
-3. Naturally weave in high-value SEO keywords for ${cleanName || `Kiekies Fashion ${cleanCategory}`}, contemporary Nigerian luxury fashion, Lagos atelier craftsmanship${cleanSizes ? `, and sizes (${cleanSizes})` : ''}.
-4. Output ONLY 2 to 3 rich, polished sentences (around 35 to 65 words, plain text only, no markdown headings, no bullet points, no surrounding quotation marks).`;
+Return strictly valid JSON with two keys:
+1. "description": A 2 to 3 sentence pinpoint editorial description highlighting the item's exact visual specifics (color saturation, fabric/material finish, cut/silhouette, hardware/stitching details, and available sizes) tailored to "${cleanCategory}".
+2. "seoBio": A concise Search Engine & Web Bio snippet (under 220 characters) packed with pinpoint specifics, sizes, price, and Kiekies Fashion Lagos keywords for Google Search, OpenGraph cards, and Instagram/WhatsApp bios.`;
 
     parts.push({ text: promptText });
 
-    const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
-    let generatedText = '';
+    const configuredModel = (process.env.GEMINI_TEXT_MODEL || '').trim();
+    const candidateModels = Array.from(
+      new Set(
+        [
+          configuredModel,
+          'gemini-flash-latest',
+          'gemini-2.5-flash',
+          'gemini-3-flash-preview',
+        ].filter(Boolean)
+      )
+    );
+    let generatedDescription = '';
+    let generatedSeoBio = '';
+    let activeSource = 'optical-specifics-engine';
 
-    for (const modelName of candidateModels) {
-      try {
-        const response: GenerateContentResponse = await ai.models.generateContent({
-          model: modelName,
-          contents: { parts },
-        });
-        const text = response.text?.trim() || '';
-        if (text) {
-          generatedText = text.replace(/^["']|["']$/g, '').trim();
-          break;
+    if ((process.env.GEMINI_API_KEY || '').trim()) {
+      for (const modelName of candidateModels) {
+        try {
+          const response: GenerateContentResponse = await ai.models.generateContent({
+            model: modelName,
+            contents: { parts },
+            config: { responseMimeType: 'application/json' },
+          });
+          const text = response.text?.trim() || '';
+          if (text) {
+            const parsed = JSON.parse(text);
+            if (parsed.description) {
+              generatedDescription = String(parsed.description).trim();
+              generatedSeoBio = String(parsed.seoBio || fallbackCopy.seoBio).trim();
+              activeSource = modelName;
+              break;
+            }
+          }
+        } catch (modelErr: any) {
+          console.warn(`Model ${modelName} attempt warning:`, modelErr?.message || modelErr);
         }
-      } catch (modelErr: any) {
-        console.warn(`Model ${modelName} attempt warning:`, modelErr?.message || modelErr);
       }
     }
 
-    if (!generatedText) {
-      generatedText = synthesizeLuxurySeoDescription({
-        name: cleanName,
-        category: cleanCategory,
-        sizes: cleanSizes,
-        price: cleanPrice,
-        colorHint: cleanColorHint,
-        hasImage: parts.length > 1,
-      });
-    }
-
     return res.json({
-      description: generatedText,
+      description: generatedDescription || fallbackCopy.description,
+      seoBio: generatedSeoBio || fallbackCopy.seoBio,
       usedImage: parts.length > 1 || Boolean(targetImage),
+      source: activeSource,
     });
   } catch (err: any) {
     console.error('Description generation fallback triggered:', err);
-    const { name, category, sizes, price, colorHint, imageUrl } = req.body || {};
-    const fallbackText = synthesizeLuxurySeoDescription({
-      name,
-      category,
-      sizes,
-      price,
-      colorHint,
-      hasImage: Boolean(imageUrl),
-    });
+    const fallbackCopy = synthesizeLuxurySeoDescription(req.body || {});
     return res.json({
-      description: fallbackText,
-      usedImage: Boolean(imageUrl),
+      description: fallbackCopy.description,
+      seoBio: fallbackCopy.seoBio,
+      usedImage: Boolean(req.body?.imageUrl),
+      source: 'optical-specifics-engine',
     });
   }
 });
