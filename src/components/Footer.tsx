@@ -10,10 +10,27 @@ export const Footer: React.FC = () => {
       <div className="max-w-7xl mx-auto px-6 md:px-12">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-12 mb-16">
           {/* Brand Col */}
-          <div className="md:col-span-2 space-y-4">
-            <h2 className="font-serif text-2xl tracking-[0.3em] uppercase text-white font-light">
-              KIEKIES
-            </h2>
+          <div className="md:col-span-2 space-y-5">
+            <button
+              type="button"
+              onClick={() => navigate('/')}
+              className="group flex items-center gap-4 text-left focus:outline-none"
+              aria-label="Kiekies Fashion World Home"
+            >
+              <img
+                src="/assets/aistudio/Screenshot_2026-10-29_101722_504c46c3.png"
+                alt="Kiekies Fashion World Logo"
+                className="w-20 h-20 sm:w-24 sm:h-24 object-contain mix-blend-lighten opacity-95 group-hover:opacity-100 transition-opacity -ml-2"
+              />
+              <div>
+                <h2 className="font-serif text-2xl tracking-[0.3em] uppercase text-white font-light">
+                  KIEKIES
+                </h2>
+                <p className="text-[10px] tracking-[0.32em] uppercase text-amber-400/80 font-mono mt-1">
+                  Fashion World · Lagos
+                </p>
+              </div>
+            </button>
             <p className="text-xs text-neutral-400 max-w-md leading-relaxed">
               A contemporary luxury fashion house based in Lagos, Nigeria. Specializing in women's, men's, and children's apparel, alongside artisanal accessories. Structured silhouettes tailored for confident movement.
             </p>

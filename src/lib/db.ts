@@ -26,11 +26,35 @@ import {
 import { DEFAULT_SITE_CONFIG, INITIAL_PRODUCTS } from './defaultData';
 import { fileToDataUrl, normalizeImageUrl } from './driveHelper';
 
+// Version v3 purges any stale legacy default hero images cached in older browser sessions
 const STORAGE_KEYS = {
-  PRODUCTS: 'kiekies_products_v1',
-  SITE_CONFIG: 'kiekies_site_config_v1',
-  ORDERS: 'kiekies_orders_v1',
+  PRODUCTS: 'kiekies_products_v3',
+  SITE_CONFIG: 'kiekies_site_config_v3',
+  HERO_IMAGE: 'kiekies_verified_hero_v3',
+  LEGACY_KEYS: [
+    'kiekies_products_v1',
+    'kiekies_site_config_v1',
+    'kiekies_products_v2',
+    'kiekies_site_config_v2',
+  ],
 };
+
+// In-memory authoritative state so quota limits in localStorage never revert live Firestore updates
+let memorySiteConfig: SiteConfig | null = null;
+let memoryProducts: Product[] | null = null;
+
+function purgeLegacyStorageKeys() {
+  if (typeof window === 'undefined') return;
+  try {
+    for (const key of STORAGE_KEYS.LEGACY_KEYS) {
+      localStorage.removeItem(key);
+    }
+  } catch {
+    // Ignore storage access errors
+  }
+}
+
+purgeLegacyStorageKeys();
 
 // Sanitize & enforce blueprint volumetric boundaries
 function sanitizeId(id: string): string {
@@ -79,6 +103,40 @@ export async function uploadImageToServer(file: File): Promise<string> {
   return compressedDataUrl;
 }
 
+/**
+ * Preloads and decodes an image URL so that when the preloader curtain opens,
+ * the exact uploaded hero image is already decoded in GPU/browser memory with zero flash.
+ */
+export function preloadImageAsset(url: string, timeoutMs = 4200): Promise<void> {
+  if (!url || typeof window === 'undefined') return Promise.resolve();
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (!settled) {
+        settled = true;
+        resolve();
+      }
+    };
+
+    const timer = window.setTimeout(finish, timeoutMs);
+    const img = new Image();
+    img.onload = () => {
+      window.clearTimeout(timer);
+      if (typeof img.decode === 'function') {
+        img.decode().then(finish).catch(finish);
+      } else {
+        finish();
+      }
+    };
+    img.onerror = () => {
+      window.clearTimeout(timer);
+      finish();
+    };
+    img.src = url;
+  });
+}
+
 // Generate 6-character uppercase alphanumeric code
 export function generateOrderCode(): string {
   const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -89,99 +147,90 @@ export function generateOrderCode(): string {
   return result;
 }
 
-// Local Storage Cache Helpers
-function getLocalProducts(): Product[] {
+/**
+ * Returns verified cached SiteConfig ONLY if it was previously synced from Firestore.
+ * Never returns unverified hardcoded defaults so legacy deleted hero images cannot flash.
+ */
+export function getVerifiedCachedSiteConfig(): SiteConfig | null {
+  if (memorySiteConfig) return memorySiteConfig;
+  if (typeof window === 'undefined') return null;
+
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
-    if (!raw) {
-      localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(INITIAL_PRODUCTS));
-      return INITIAL_PRODUCTS;
+    const rawConfig = localStorage.getItem(STORAGE_KEYS.SITE_CONFIG);
+    const rawHero = localStorage.getItem(STORAGE_KEYS.HERO_IMAGE);
+    if (rawConfig) {
+      const parsed = JSON.parse(rawConfig) as SiteConfig;
+      if (rawHero) {
+        parsed.hero = { imageUrl: rawHero };
+      }
+      if (parsed?.hero?.imageUrl && parsed?.category_heroes) {
+        memorySiteConfig = parsed;
+        return parsed;
+      }
     }
-    return JSON.parse(raw);
   } catch {
-    return INITIAL_PRODUCTS;
+    // Ignore storage read errors
   }
+  return null;
 }
 
-function saveLocalProducts(products: Product[]) {
+export function getVerifiedCachedProducts(): Product[] | null {
+  if (memoryProducts && memoryProducts.length > 0) return memoryProducts;
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Product[];
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        memoryProducts = parsed;
+        return parsed;
+      }
+    }
+  } catch {
+    // Ignore storage read errors
+  }
+  return null;
+}
+
+function saveVerifiedProducts(products: Product[]) {
+  memoryProducts = products;
   try {
     localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
   } catch {
-    // Ignore storage quota warnings on local cache
+    // If products array has large base64 strings exceeding localStorage quota, memoryProducts still holds it
   }
 }
 
-function getLocalSiteConfig(): SiteConfig {
+function saveVerifiedSiteConfig(config: SiteConfig) {
+  memorySiteConfig = config;
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.SITE_CONFIG);
-    if (!raw) {
-      localStorage.setItem(STORAGE_KEYS.SITE_CONFIG, JSON.stringify(DEFAULT_SITE_CONFIG));
-      return DEFAULT_SITE_CONFIG;
+    // Always prioritize saving the hero image key independently so it never fails due to product cache size
+    if (config.hero?.imageUrl) {
+      localStorage.setItem(STORAGE_KEYS.HERO_IMAGE, config.hero.imageUrl);
     }
-    return JSON.parse(raw);
-  } catch {
-    return DEFAULT_SITE_CONFIG;
-  }
-}
-
-function saveLocalSiteConfig(config: SiteConfig) {
-  try {
     localStorage.setItem(STORAGE_KEYS.SITE_CONFIG, JSON.stringify(config));
   } catch {
-    // Ignore storage quota warnings on local cache
+    // If quota is tight, clear product cache to make room for site_config/hero
+    try {
+      localStorage.removeItem(STORAGE_KEYS.PRODUCTS);
+      if (config.hero?.imageUrl) {
+        localStorage.setItem(STORAGE_KEYS.HERO_IMAGE, config.hero.imageUrl);
+      }
+      localStorage.setItem(STORAGE_KEYS.SITE_CONFIG, JSON.stringify(config));
+    } catch {
+      // Held in memorySiteConfig
+    }
   }
 }
 
-// Seed initial catalog and site_config into Firestore if empty
-let seedingPromise: Promise<void> | null = null;
-
-export async function ensureFirestoreSeeded(): Promise<void> {
-  if (seedingPromise) return seedingPromise;
-
-  seedingPromise = (async () => {
-    try {
-      const productsQuery = query(collection(db, 'products'), where('price', '>=', 0));
-      const [heroSnap, catSnap, productsSnap] = await Promise.all([
-        getDoc(doc(db, 'site_config', 'hero')),
-        getDoc(doc(db, 'site_config', 'category_heroes')),
-        getDocs(productsQuery),
-      ]);
-
-      const now = new Date().toISOString().slice(0, 64);
-
-      if (!heroSnap.exists()) {
-        await setDoc(doc(db, 'site_config', 'hero'), {
-          key: 'hero',
-          imageUrl: DEFAULT_SITE_CONFIG.hero.imageUrl,
-          updated_at: now,
-        });
-      }
-
-      if (!catSnap.exists()) {
-        await setDoc(doc(db, 'site_config', 'category_heroes'), {
-          key: 'category_heroes',
-          women: DEFAULT_SITE_CONFIG.category_heroes.women,
-          men: DEFAULT_SITE_CONFIG.category_heroes.men,
-          kids: DEFAULT_SITE_CONFIG.category_heroes.kids,
-          accessories: DEFAULT_SITE_CONFIG.category_heroes.accessories,
-          updated_at: now,
-        });
-      }
-
-      if (productsSnap.empty) {
-        await Promise.all(
-          INITIAL_PRODUCTS.map((p) => {
-            const clean = sanitizeProductPayload(p);
-            return setDoc(doc(db, 'products', clean.id), clean);
-          })
-        );
-      }
-    } catch (error) {
-      console.warn('Initial Firestore seed check warning:', error);
+function getBaseSiteConfig(): SiteConfig {
+  return (
+    getVerifiedCachedSiteConfig() || {
+      hero: { imageUrl: DEFAULT_SITE_CONFIG.hero.imageUrl },
+      category_heroes: { ...DEFAULT_SITE_CONFIG.category_heroes },
     }
-  })();
-
-  return seedingPromise;
+  );
 }
 
 // Real-time Subscriptions for Live Storefront Sync
@@ -192,103 +241,105 @@ export function subscribeToStorefront(
   let unsubProducts: (() => void) | null = null;
   let unsubHero: (() => void) | null = null;
   let unsubCategories: (() => void) | null = null;
-  let cancelled = false;
 
-  ensureFirestoreSeeded().then(() => {
-    if (cancelled) return;
-
-    const productsQuery = query(collection(db, 'products'), where('price', '>=', 0));
-    unsubProducts = onSnapshot(
-      productsQuery,
-      (snapshot) => {
-        if (!snapshot.empty) {
-          const list = snapshot.docs.map((d) => d.data() as Product);
-          list.sort(
-            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-          );
-          saveLocalProducts(list);
-          onProductsChange(list);
-        }
-      },
-      (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'products');
+  const productsQuery = query(collection(db, 'products'), where('price', '>=', 0));
+  unsubProducts = onSnapshot(
+    productsQuery,
+    (snapshot) => {
+      if (!snapshot.empty) {
+        const list = snapshot.docs.map((d) => d.data() as Product);
+        list.sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
+        saveVerifiedProducts(list);
+        onProductsChange(list);
       }
-    );
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'products');
+    }
+  );
 
-    unsubHero = onSnapshot(
-      doc(db, 'site_config', 'hero'),
-      (docSnap) => {
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          if (data.imageUrl) {
-            const current = getLocalSiteConfig();
-            const next: SiteConfig = {
-              hero: { imageUrl: data.imageUrl },
-              category_heroes: { ...current.category_heroes },
-            };
-            saveLocalSiteConfig(next);
-            onSiteConfigChange(next);
-          }
-        }
-      },
-      (error) => {
-        handleFirestoreError(error, OperationType.GET, 'site_config/hero');
-      }
-    );
-
-    unsubCategories = onSnapshot(
-      doc(db, 'site_config', 'category_heroes'),
-      (docSnap) => {
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          const current = getLocalSiteConfig();
+  unsubHero = onSnapshot(
+    doc(db, 'site_config', 'hero'),
+    (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.imageUrl) {
+          const current = getBaseSiteConfig();
           const next: SiteConfig = {
-            hero: { ...current.hero },
-            category_heroes: {
-              women: data.women || current.category_heroes.women,
-              men: data.men || current.category_heroes.men,
-              kids: data.kids || current.category_heroes.kids,
-              accessories: data.accessories || current.category_heroes.accessories,
-            },
+            hero: { imageUrl: data.imageUrl },
+            category_heroes: { ...current.category_heroes },
           };
-          saveLocalSiteConfig(next);
+          saveVerifiedSiteConfig(next);
           onSiteConfigChange(next);
         }
-      },
-      (error) => {
-        handleFirestoreError(error, OperationType.GET, 'site_config/category_heroes');
       }
-    );
-  });
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.GET, 'site_config/hero');
+    }
+  );
+
+  unsubCategories = onSnapshot(
+    doc(db, 'site_config', 'category_heroes'),
+    (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        const current = getBaseSiteConfig();
+        const next: SiteConfig = {
+          hero: { ...current.hero },
+          category_heroes: {
+            women: data.women || current.category_heroes.women,
+            men: data.men || current.category_heroes.men,
+            kids: data.kids || current.category_heroes.kids,
+            accessories: data.accessories || current.category_heroes.accessories,
+          },
+        };
+        saveVerifiedSiteConfig(next);
+        onSiteConfigChange(next);
+      }
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.GET, 'site_config/category_heroes');
+    }
+  );
 
   return () => {
-    cancelled = true;
     if (unsubProducts) unsubProducts();
     if (unsubHero) unsubHero();
     if (unsubCategories) unsubCategories();
   };
 }
 
-// --- SITE CONFIG API ---
+// --- SITE CONFIG API (Direct Single-Roundtrip Authoritative Read) ---
 export async function getSiteConfig(): Promise<SiteConfig> {
-  await ensureFirestoreSeeded();
   try {
     const [heroSnap, catSnap] = await Promise.all([
       getDoc(doc(db, 'site_config', 'hero')),
       getDoc(doc(db, 'site_config', 'category_heroes')),
     ]);
 
-    const current = getLocalSiteConfig();
+    const current = getBaseSiteConfig();
     const config: SiteConfig = {
       hero: { ...current.hero },
       category_heroes: { ...current.category_heroes },
     };
+
+    const now = new Date().toISOString().slice(0, 64);
 
     if (heroSnap.exists()) {
       const data = heroSnap.data();
       if (data.imageUrl) {
         config.hero = { imageUrl: data.imageUrl };
       }
+    } else {
+      // Only seed if the document truly does not exist in Firestore yet
+      await setDoc(doc(db, 'site_config', 'hero'), {
+        key: 'hero',
+        imageUrl: config.hero.imageUrl,
+        updated_at: now,
+      });
     }
 
     if (catSnap.exists()) {
@@ -299,11 +350,19 @@ export async function getSiteConfig(): Promise<SiteConfig> {
         kids: data.kids || config.category_heroes.kids,
         accessories: data.accessories || config.category_heroes.accessories,
       };
+    } else {
+      await setDoc(doc(db, 'site_config', 'category_heroes'), {
+        key: 'category_heroes',
+        ...config.category_heroes,
+        updated_at: now,
+      });
     }
 
-    saveLocalSiteConfig(config);
+    saveVerifiedSiteConfig(config);
     return config;
   } catch (error) {
+    const cached = getVerifiedCachedSiteConfig();
+    if (cached) return cached;
     handleFirestoreError(error, OperationType.GET, 'site_config/hero');
   }
 }
@@ -323,12 +382,12 @@ export async function updateSiteConfigHero(imageUrl: string): Promise<SiteConfig
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 
-  const current = getLocalSiteConfig();
+  const current = getBaseSiteConfig();
   const updated: SiteConfig = {
     ...current,
     hero: { imageUrl: cleanUrl },
   };
-  saveLocalSiteConfig(updated);
+  saveVerifiedSiteConfig(updated);
   return updated;
 }
 
@@ -357,12 +416,12 @@ export async function updateSiteConfigCategoryHeroes(
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 
-  const current = getLocalSiteConfig();
+  const current = getBaseSiteConfig();
   const updated: SiteConfig = {
     ...current,
     category_heroes: cleanHeroes,
   };
-  saveLocalSiteConfig(updated);
+  saveVerifiedSiteConfig(updated);
   return updated;
 }
 
@@ -376,7 +435,6 @@ export interface ProductQueryOptions {
 
 export async function getProducts(options: ProductQueryOptions = {}): Promise<Product[]> {
   const { category, status = 'published', featured, best_seller } = options;
-  await ensureFirestoreSeeded();
 
   let products: Product[] = [];
 
@@ -385,12 +443,30 @@ export async function getProducts(options: ProductQueryOptions = {}): Promise<Pr
     const snap = await getDocs(productsQuery);
     if (!snap.empty) {
       products = snap.docs.map((d) => d.data() as Product);
-      saveLocalProducts(products);
+      saveVerifiedProducts(products);
     } else {
-      products = getLocalProducts();
+      // Only seed default products if the entire database has never been initialized
+      const heroSnap = await getDoc(doc(db, 'site_config', 'hero'));
+      if (!heroSnap.exists()) {
+        await Promise.all(
+          INITIAL_PRODUCTS.map((p) => {
+            const clean = sanitizeProductPayload(p);
+            return setDoc(doc(db, 'products', clean.id), clean);
+          })
+        );
+        products = [...INITIAL_PRODUCTS];
+        saveVerifiedProducts(products);
+      } else {
+        products = getVerifiedCachedProducts() || [];
+      }
     }
   } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, 'products');
+    const cached = getVerifiedCachedProducts();
+    if (cached) {
+      products = cached;
+    } else {
+      handleFirestoreError(error, OperationType.LIST, 'products');
+    }
   }
 
   if (status !== 'all') {
@@ -422,7 +498,7 @@ export async function getProductById(id: string): Promise<Product | null> {
     handleFirestoreError(error, OperationType.GET, `products/${cleanId}`);
   }
 
-  const products = getLocalProducts();
+  const products = getVerifiedCachedProducts() || [];
   return products.find((p) => p.id === cleanId) || null;
 }
 
@@ -445,8 +521,8 @@ export async function createProduct(
     handleFirestoreError(error, OperationType.CREATE, path);
   }
 
-  const local = getLocalProducts();
-  saveLocalProducts([newProduct, ...local.filter((p) => p.id !== newProduct.id)]);
+  const local = getVerifiedCachedProducts() || [];
+  saveVerifiedProducts([newProduct, ...local.filter((p) => p.id !== newProduct.id)]);
   return newProduct;
 }
 
@@ -472,11 +548,11 @@ export async function updateProduct(
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
 
-  const local = getLocalProducts();
+  const local = getVerifiedCachedProducts() || [];
   const idx = local.findIndex((p) => p.id === cleanId);
   if (idx !== -1) {
     local[idx] = updatedProduct;
-    saveLocalProducts(local);
+    saveVerifiedProducts(local);
   }
 
   return updatedProduct;
@@ -491,8 +567,8 @@ export async function deleteProduct(id: string): Promise<boolean> {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
 
-  const local = getLocalProducts().filter((p) => p.id !== cleanId);
-  saveLocalProducts(local);
+  const local = (getVerifiedCachedProducts() || []).filter((p) => p.id !== cleanId);
+  saveVerifiedProducts(local);
   return true;
 }
 

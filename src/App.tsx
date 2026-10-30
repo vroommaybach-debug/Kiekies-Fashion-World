@@ -3,15 +3,23 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Product, SiteConfig } from './types';
-import { getProducts, getSiteConfig, subscribeToStorefront } from './lib/db';
+import {
+  getProducts,
+  getSiteConfig,
+  subscribeToStorefront,
+  getVerifiedCachedSiteConfig,
+  getVerifiedCachedProducts,
+  preloadImageAsset,
+} from './lib/db';
 import { DEFAULT_SITE_CONFIG, INITIAL_PRODUCTS } from './lib/defaultData';
 import { RouterProvider, useRouter, parseRoute } from './lib/router';
 import { CartProvider } from './context/CartContext';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
 import { CartDrawer } from './components/CartDrawer';
+import { BrandPreloader } from './components/BrandPreloader';
 
 import { HomePage } from './pages/HomePage';
 import { ProductDetailPage } from './pages/ProductDetailPage';
@@ -20,46 +28,93 @@ import { OrderSummaryPage } from './pages/OrderSummaryPage';
 import { CartPage } from './pages/CartPage';
 import { AdminPage } from './pages/AdminPage';
 
+// Blank placeholder config used only before Firestore responds on cold cache so legacy hero never renders
+const EMPTY_BOOT_SITE_CONFIG: SiteConfig = {
+  hero: { imageUrl: '' },
+  category_heroes: {
+    women: '',
+    men: '',
+    kids: '',
+    accessories: '',
+  },
+};
+
 function AppContent() {
   const { path } = useRouter();
   const route = parseRoute(path);
 
-  const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
-  const [siteConfig, setSiteConfig] = useState<SiteConfig>(DEFAULT_SITE_CONFIG);
+  const [products, setProducts] = useState<Product[]>(
+    () => getVerifiedCachedProducts() || []
+  );
+  const [siteConfig, setSiteConfig] = useState<SiteConfig>(
+    () => getVerifiedCachedSiteConfig() || EMPTY_BOOT_SITE_CONFIG
+  );
+  const [isBootReady, setIsBootReady] = useState<boolean>(false);
+  const [showPreloader, setShowPreloader] = useState<boolean>(true);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       const [prods, config] = await Promise.all([
         getProducts({ status: 'all' }),
         getSiteConfig(),
       ]);
-      if (prods && prods.length > 0) setProducts(prods);
-      if (config) setSiteConfig(config);
+
+      const resolvedConfig = config || DEFAULT_SITE_CONFIG;
+      const resolvedProducts =
+        prods && prods.length > 0 ? prods : INITIAL_PRODUCTS;
+
+      setProducts(resolvedProducts);
+      setSiteConfig(resolvedConfig);
+
+      // Preload & decode the exact active hero image before lifting the preloader
+      if (resolvedConfig.hero?.imageUrl) {
+        await preloadImageAsset(resolvedConfig.hero.imageUrl, 3800);
+      }
     } catch (err) {
       console.error('Failed to load initial atelier data:', err);
+      setSiteConfig((prev) =>
+        prev.hero.imageUrl ? prev : DEFAULT_SITE_CONFIG
+      );
+      setProducts((prev) => (prev.length > 0 ? prev : INITIAL_PRODUCTS));
     }
-  };
+  }, []);
 
   useEffect(() => {
-    loadData();
+    let mounted = true;
+    const minAnimationPromise = new Promise<void>((resolve) =>
+      window.setTimeout(resolve, 1350)
+    );
+
+    Promise.all([loadData(), minAnimationPromise]).then(() => {
+      if (mounted) {
+        setIsBootReady(true);
+      }
+    });
+
     const unsubscribe = subscribeToStorefront(
       (liveProducts) => {
-        if (liveProducts && liveProducts.length > 0) {
+        if (mounted && liveProducts && liveProducts.length > 0) {
           setProducts(liveProducts);
         }
       },
-      (liveConfig) => {
-        if (liveConfig) {
-          setSiteConfig(liveConfig);
+      async (liveConfig) => {
+        if (mounted && liveConfig?.hero?.imageUrl) {
+          await preloadImageAsset(liveConfig.hero.imageUrl, 2500);
+          if (mounted) {
+            setSiteConfig(liveConfig);
+          }
         }
       }
     );
-    return () => unsubscribe();
-  }, []);
+
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, [loadData]);
 
   const isHome = route.name === 'home';
 
-  // Render route content
   const renderCurrentView = () => {
     switch (route.name) {
       case 'home':
@@ -67,6 +122,7 @@ function AppContent() {
           <HomePage
             products={products.filter((p) => p.status === 'published')}
             siteConfig={siteConfig}
+            isReady={isBootReady}
           />
         );
 
@@ -133,7 +189,15 @@ function AppContent() {
 
   return (
     <div className="min-h-screen bg-black text-white flex flex-col selection:bg-white selection:text-black">
-      {/* Whisper Navbar (transparent on hero, dark glass on scroll or subpages) */}
+      {/* Kiki's Fashion World Motion-Graphics Preloader */}
+      {showPreloader && (
+        <BrandPreloader
+          isReady={isBootReady}
+          onExited={() => setShowPreloader(false)}
+        />
+      )}
+
+      {/* Whisper Navbar */}
       <Navbar faintOnHero={isHome} />
 
       {/* Main View */}

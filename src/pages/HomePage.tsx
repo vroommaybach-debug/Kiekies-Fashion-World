@@ -14,9 +14,14 @@ import { WhatsAppCtaSection } from '../components/home/WhatsAppCtaSection';
 interface HomePageProps {
   products: Product[];
   siteConfig: SiteConfig;
+  isReady?: boolean;
 }
 
-export const HomePage: React.FC<HomePageProps> = ({ products, siteConfig }) => {
+export const HomePage: React.FC<HomePageProps> = ({
+  products,
+  siteConfig,
+  isReady = true,
+}) => {
   // Find featured / best seller centerpiece product
   const featuredProduct =
     products.find((p) => p.featured) ||
@@ -27,9 +32,9 @@ export const HomePage: React.FC<HomePageProps> = ({ products, siteConfig }) => {
   const organizationSchema = {
     '@context': 'https://schema.org',
     '@type': 'ClothingStore',
-    name: 'Kiekies Fashion',
+    name: 'Kiekies Fashion World',
     description:
-      'Kiekies Fashion is a luxury contemporary fashion house based in Nigeria specializing in women\'s, men\'s, and children\'s apparel, alongside artisanal accessories. The brand offers structured tailoring and minimalist silhouettes with direct WhatsApp-based order consultation and fulfillment.',
+      "Kiekies Fashion World is a luxury contemporary fashion house based in Nigeria specializing in women's, men's, and children's apparel, alongside artisanal accessories. The brand offers structured tailoring and minimalist silhouettes with direct WhatsApp-based order consultation and fulfillment.",
     url: typeof window !== 'undefined' ? window.location.origin : 'https://kiekiesfashion.com',
     telephone: '+2348182952013',
     currenciesAccepted: 'NGN',
@@ -45,14 +50,14 @@ export const HomePage: React.FC<HomePageProps> = ({ products, siteConfig }) => {
   return (
     <div className="w-full bg-black text-white">
       <MetaSEO
-        title="Kiekies Fashion – Contemporary Luxury & Ready-to-Wear"
-        description="Kiekies Fashion is a luxury contemporary fashion house based in Nigeria specializing in women's, men's, and children's apparel, alongside artisanal accessories. Direct order consultation over WhatsApp."
+        title="Kiekies Fashion World – Contemporary Luxury & Ready-to-Wear"
+        description="Kiekies Fashion World is a luxury contemporary fashion house based in Nigeria specializing in women's, men's, and children's apparel, alongside artisanal accessories."
         image={siteConfig.hero.imageUrl}
         jsonLd={organizationSchema}
       />
 
       {/* 1. HERO — "The Held Breath" */}
-      <HeroSection heroImageUrl={siteConfig.hero.imageUrl} />
+      <HeroSection heroImageUrl={siteConfig.hero.imageUrl} isReady={isReady} />
 
       {/* 2. BRAND STATEMENT — "The Thesis" */}
       <BrandThesisSection />

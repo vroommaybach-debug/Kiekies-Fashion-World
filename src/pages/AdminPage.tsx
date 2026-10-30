@@ -15,7 +15,11 @@ import { useRouter } from '../lib/router';
 import { MetaSEO } from '../components/MetaSEO';
 import { normalizeImageUrl, isGoogleDriveUrl } from '../lib/driveHelper';
 import { extractPaletteFromImage } from '../lib/colorExtractor';
-import { inspectProductVisualSpecifics, VisualSpecificsProfile } from '../lib/studioEngine';
+import {
+  inspectProductVisualSpecifics,
+  synthesizeOnlineProductBioAndCopy,
+  VisualSpecificsProfile,
+} from '../lib/studioEngine';
 import { AtelierPhotoStudio } from '../components/admin/AtelierPhotoStudio';
 import {
   Shield,
@@ -138,6 +142,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   const [seoWebBio, setSeoWebBio] = useState<string>('');
   const [copiedBio, setCopiedBio] = useState<boolean>(false);
   const [visualProfile, setVisualProfile] = useState<VisualSpecificsProfile | null>(null);
+  const [appliedStudioBackdropName, setAppliedStudioBackdropName] = useState<string>('');
 
   // Automatically inspect uploaded product image for pinpoint color, sheen & silhouette specifics
   useEffect(() => {
@@ -151,7 +156,11 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     }
 
     let cancelled = false;
-    inspectProductVisualSpecifics(activeImg, productForm.category).then((profile) => {
+    inspectProductVisualSpecifics(
+      activeImg,
+      productForm.category,
+      appliedStudioBackdropName || undefined
+    ).then((profile) => {
       if (!cancelled) {
         setVisualProfile(profile);
       }
@@ -160,71 +169,19 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [productForm.image_url, productForm.gallery_urls, productForm.category]);
+  }, [
+    productForm.image_url,
+    productForm.gallery_urls,
+    productForm.category,
+    appliedStudioBackdropName,
+  ]);
 
-  // Client-side Pinpoint Product & Search/Web Bio synthesizer utilizing any 1 or all available fields + optical profile
-  const buildClientPinpointCopy = (profile: VisualSpecificsProfile | null): {
-    description: string;
-    seoBio: string;
-  } => {
-    const rawName = productForm.name.trim();
-    const cat = (productForm.category || 'women').toLowerCase();
-    const rawSizes = productForm.sizes.trim();
-    const rawPrice = String(productForm.price || '').trim();
-    const rawSpec = adminSpecifics.trim();
-
-    const primaryColor = profile?.primaryColorName || 'Obsidian & Burnished Gold';
-    const secondaryColor = profile?.secondaryColorName || '';
-    const finish = profile?.surfaceFinish || 'hand-selected luxury cloth';
-    const silhouette = profile?.silhouetteNote || 'architectural Lagos tailoring';
-
-    const colorPhrase =
-      secondaryColor && secondaryColor !== primaryColor
-        ? `${primaryColor} with ${secondaryColor} undertones`
-        : primaryColor;
-
-    const specificsSentence = rawSpec
-      ? ` Distinguished by ${rawSpec.replace(/\.$/, '')}.`
-      : '';
-
-    const sizeClause = rawSizes
-      ? ` Available in ${rawSizes} with direct Lagos atelier consultation and nationwide delivery.`
-      : ' Available for immediate acquisition and bespoke styling consultation via our Lagos atelier.';
-
-    const priceFormatted = rawPrice ? formatNGN(Number(rawPrice) || 0) : '';
-
-    let description = '';
-    let title = rawName;
-
-    if (cat === 'accessories') {
-      title = rawName || `The ${primaryColor} Atelier Accessory`;
-      description = `${title} is a sculptural luxury accessory rendered in ${colorPhrase}, crafted with ${finish.toLowerCase()} and ${silhouette.toLowerCase()}.${specificsSentence} Hand-finished by Kiekies Fashion to anchor contemporary Nigerian ready-to-wear and formal evening ensembles.${sizeClause}`;
-    } else if (cat === 'men') {
-      title = rawName || `The ${primaryColor} Sovereign Menswear Piece`;
-      description = `${title} exemplifies contemporary Nigerian menswear tailoring in ${colorPhrase}, featuring ${finish.toLowerCase()} and ${silhouette.toLowerCase()}.${specificsSentence} Engineered by Kiekies Fashion for commanding presence across ceremonial occasions and executive settings.${sizeClause}`;
-    } else if (cat === 'kids') {
-      title = rawName || `The ${primaryColor} Junior Heritage Piece`;
-      description = `${title} brings Kiekies Fashion's signature architectural tailoring to junior couture in ${colorPhrase}, crafted from ${finish.toLowerCase()} with ${silhouette.toLowerCase()}.${specificsSentence} Thoughtfully proportioned for breathable comfort, durability, and standout family occasions.${sizeClause}`;
-    } else {
-      title = rawName || `The ${primaryColor} Atelier Silhouette`;
-      description = `${title} is a contemporary luxury statement from Kiekies Fashion drenched in ${colorPhrase}, sculpted in ${finish.toLowerCase()} with ${silhouette.toLowerCase()}.${specificsSentence} Created in our Lagos workshop for effortless authority from high-stakes boardrooms to evening galas.${sizeClause}`;
-    }
-
-    const seoBioParts = [
-      `${title} by Kiekies Fashion (Lagos).`,
-      `${colorPhrase} · ${finish}.`,
-      rawSpec ? `${rawSpec.replace(/\.$/, '')}.` : '',
-      rawSizes ? `Sizes: ${rawSizes}.` : '',
-      priceFormatted ? `${priceFormatted} ·` : '',
-      'Direct WhatsApp concierge & nationwide delivery.',
-    ].filter(Boolean);
-
-    const seoBio = seoBioParts.join(' ').replace(/\s+/g, ' ').trim();
-    return { description, seoBio };
-  };
-
-  // AI Pinpoint Product Description & Search/Web Bio Generator (Utilizes ANY 1 or ALL available fields + Image Vision)
-  const handleGenerateSeoDescription = async () => {
+  // Online Browser-Connected Product Description & Search/Web Bio Generator
+  // Utilizes the user's live online connection + optical garment profile + studio redesign metadata + any/all admin fields
+  const handleGenerateSeoDescription = async (
+    overrideImageUrl?: string,
+    overrideBackdropName?: string
+  ) => {
     setFormError(null);
     setDescGenBadge(null);
     setGeneratingDesc(true);
@@ -232,63 +189,44 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     const firstGalleryUrl = productForm.gallery_urls
       ? productForm.gallery_urls.split('\n').map((s) => s.trim()).find(Boolean) || ''
       : '';
-    const activeImageUrl = productForm.image_url.trim() || firstGalleryUrl;
-
-    const inspectedProfile =
-      visualProfile || (await inspectProductVisualSpecifics(activeImageUrl, productForm.category));
-    setVisualProfile(inspectedProfile);
-
-    const localFallback = buildClientPinpointCopy(inspectedProfile);
+    const activeImageUrl =
+      (overrideImageUrl !== undefined ? overrideImageUrl : productForm.image_url.trim()) ||
+      firstGalleryUrl;
+    const activeBackdrop =
+      overrideBackdropName !== undefined ? overrideBackdropName : appliedStudioBackdropName;
 
     try {
-      const response = await fetch('/api/generate-description', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: productForm.name.trim(),
-          category: productForm.category,
-          sizes: productForm.sizes.trim(),
-          price: productForm.price,
-          specifics: adminSpecifics.trim(),
-          imageUrl: inspectedProfile.compactVisionDataUrl || activeImageUrl,
-          colorHint: inspectedProfile.primaryColorName,
-          secondaryColorHint: inspectedProfile.secondaryColorName,
-          surfaceFinish: inspectedProfile.surfaceFinish,
-          silhouetteNote: inspectedProfile.silhouetteNote,
-        }),
+      const inspectedProfile = await inspectProductVisualSpecifics(
+        activeImageUrl,
+        productForm.category,
+        activeBackdrop || undefined
+      );
+      setVisualProfile(inspectedProfile);
+
+      // Synthesize using live browser online data + optical garment inspection + studio redesign context
+      const onlineEnriched = await synthesizeOnlineProductBioAndCopy({
+        name: productForm.name.trim(),
+        category: productForm.category,
+        sizes: productForm.sizes.trim(),
+        price: productForm.price,
+        specifics: adminSpecifics.trim(),
+        visualProfile: inspectedProfile,
+        appliedBackdropName: activeBackdrop || undefined,
       });
 
-      const rawText = await response.text();
-      let data: { description?: string; seoBio?: string; usedImage?: boolean } = {};
-      try {
-        data = rawText ? JSON.parse(rawText) : {};
-      } catch {
-        data = localFallback;
-      }
-
-      const finalDescription =
-        (data.description && data.description.trim()) || localFallback.description;
-      const finalSeoBio =
-        (data.seoBio && data.seoBio.trim()) || localFallback.seoBio;
-
-      setProductForm((prev) => ({ ...prev, description: finalDescription }));
-      setSeoWebBio(finalSeoBio);
+      setProductForm((prev) => ({
+        ...prev,
+        description: onlineEnriched.description,
+      }));
+      setSeoWebBio(onlineEnriched.seoBio);
       setDescGenBadge(
-        activeImageUrl
-          ? 'Pinpoint Copy & Web Bio Generated from Photo + Specifics'
-          : 'Pinpoint Copy & Web Bio Generated from Specifics'
+        activeBackdrop
+          ? `Bio Reimbursed via Online Data + ${activeBackdrop.replace(/^\d+\.\s*/, '')} Redesign`
+          : `${onlineEnriched.enrichmentSource}`
       );
-      setTimeout(() => setDescGenBadge(null), 5000);
+      setTimeout(() => setDescGenBadge(null), 5500);
     } catch (err) {
-      console.warn('Using client pinpoint SEO synthesizer fallback:', err);
-      setProductForm((prev) => ({ ...prev, description: localFallback.description }));
-      setSeoWebBio(localFallback.seoBio);
-      setDescGenBadge(
-        activeImageUrl
-          ? 'Pinpoint Copy & Web Bio Generated from Photo + Specifics'
-          : 'Pinpoint Copy & Web Bio Generated from Specifics'
-      );
-      setTimeout(() => setDescGenBadge(null), 5000);
+      console.warn('Online bio enrichment warning:', err);
     } finally {
       setGeneratingDesc(false);
     }
@@ -1178,14 +1116,18 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                           />
                         </div>
 
-                        {/* Inline 20-Backdrop AI Photo Studio for Primary Product Image */}
+                        {/* Inline 20-Backdrop Studio for Primary Product Image */}
                         <AtelierPhotoStudio
                           sourceImageUrl={productForm.image_url}
                           aspectRatio="3:4"
                           slotLabel="Primary Product Photo"
-                          onApplyImage={(retouchedUrl) =>
-                            setProductForm((prev) => ({ ...prev, image_url: retouchedUrl }))
-                          }
+                          onApplyImage={(retouchedUrl, appliedBackdrop) => {
+                            const backdropTitle = appliedBackdrop?.name || '';
+                            setAppliedStudioBackdropName(backdropTitle);
+                            setProductForm((prev) => ({ ...prev, image_url: retouchedUrl }));
+                            // Automatically reimburse & enrich product description & bio for the newly redesigned product
+                            handleGenerateSeoDescription(retouchedUrl, backdropTitle);
+                          }}
                         />
                       </div>
                     )}
@@ -1237,10 +1179,10 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-neutral-900 pb-4">
                       <div>
                         <h3 className="font-serif text-lg text-white font-light tracking-wide">
-                          Pinpoint Product Description & Search / Web Bio Suite
+                          Online-Connected Product Description &amp; Search / Web Bio Suite
                         </h3>
                         <p className="text-xs text-neutral-400 mt-0.5">
-                          Extracts real color, fabric sheen & silhouette specifics from your photo alongside any admin notes.
+                          Utilizes your active online connection, optical garment analysis, and Studio Redesign metadata to reimburse product bios.
                         </p>
                       </div>
 
@@ -1253,24 +1195,24 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                         )}
                         <button
                           type="button"
-                          onClick={handleGenerateSeoDescription}
+                          onClick={() => handleGenerateSeoDescription()}
                           disabled={generatingDesc}
                           className="border border-amber-400 bg-amber-400 hover:bg-amber-300 text-black px-4 py-2 text-xs uppercase tracking-wider font-mono font-semibold flex items-center gap-2 transition-all disabled:opacity-50 whitespace-nowrap shrink-0"
                         >
                           <Sparkles size={13} className={generatingDesc ? 'animate-spin' : ''} />
                           <span>
                             {generatingDesc
-                              ? 'Inspecting Specifics...'
-                              : 'Generate Pinpoint Description & Web Bio'}
+                              ? 'Enriching via Online Data...'
+                              : 'Enrich Product Bio & Description'}
                           </span>
                         </button>
                       </div>
                     </div>
 
-                    {/* Live Detected Optical Specifics from Uploaded Photo */}
+                    {/* Live Detected Optical Specifics from Uploaded & Redesigned Photo */}
                     {visualProfile && (
                       <div className="flex flex-wrap items-center gap-3 text-xs font-mono text-neutral-300 bg-neutral-950 p-3 border border-neutral-900">
-                        <span className="text-neutral-500 uppercase">Detected Photo Specifics:</span>
+                        <span className="text-neutral-500 uppercase">Detected Garment Data:</span>
                         <span className="flex items-center gap-1.5">
                           <span
                             className="w-3 h-3 inline-block border border-white/30"
@@ -1288,6 +1230,14 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                         </span>
                         <span aria-hidden="true">·</span>
                         <span className="text-amber-300">{visualProfile.surfaceFinish}</span>
+                        {appliedStudioBackdropName && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span className="text-emerald-400">
+                              Redesigned on {appliedStudioBackdropName}
+                            </span>
+                          </>
+                        )}
                       </div>
                     )}
 
